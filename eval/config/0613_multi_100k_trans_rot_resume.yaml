@@ -1,0 +1,182 @@
+defaults:
+  - default_dataset_smpl.yaml
+
+
+exp_name: 0613_multi_100k_trans_rot_resume
+img_size: 518
+num_workers: 0
+seed_value: 42
+accum_steps: 1
+patch_size: 14
+val_epoch_freq: 5
+max_img_per_gpu: 72
+
+limit_train_batches: 834
+limit_val_batches: 92
+
+
+data:
+  train:
+    _target_: data.dynamic_dataloader.DynamicTorchDataset
+    num_workers: ${num_workers}
+    max_img_per_gpu: ${max_img_per_gpu}
+    common_config:
+      img_size: ${img_size}
+      patch_size: ${patch_size}
+      debug: False
+      repeat_batch: False
+    dataset:
+      _target_: data.composed_dataset.ComposedDataset
+      dataset_configs:
+        - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
+          split: train
+          SysSMPL_DIR: /mnt/train-data-3-hdd/clchen/SMPL_multi_dataset/0513_cloth3d_100k/train/out_image/CLOTH3D
+          SysSMPL_ANNOTATION_DIR: /mnt/train-data-3-hdd/clchen/SMPL_multi_dataset/0513_cloth3d_100k/train/out_data/CLOTH3D
+          max_num_people: 6
+          min_num_images: 2
+  val:
+    _target_: data.dynamic_dataloader.DynamicTorchDataset
+    num_workers: ${num_workers}
+    max_img_per_gpu: ${max_img_per_gpu}
+    common_config:
+      img_size: ${img_size}
+      patch_size: ${patch_size}
+      debug: False
+    dataset:
+      _target_: data.composed_dataset.ComposedDataset
+      dataset_configs:
+        - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
+          split: test
+          SysSMPL_DIR: /mnt/train-data-3-hdd/clchen/SMPL_multi_dataset/0513_cloth3d_100k/test/out_image/CLOTH3D
+          SysSMPL_ANNOTATION_DIR: /mnt/train-data-3-hdd/clchen/SMPL_multi_dataset/0513_cloth3d_100k/test/out_data/CLOTH3D
+          max_num_people: 6
+          min_num_images: 2
+
+
+logging:
+  log_dir: logs/${exp_name}
+  use_wandb: False
+  log_visuals: False
+  log_freq: 1
+  log_level_primary: DEBUG
+  log_level_secondary: WARNING
+  all_ranks: False
+  tensorboard_writer:
+    _target_: train_utils.tb_writer.TensorBoardLogger
+    path: ${logging.log_dir}/tensorboard
+  wandb_writer:
+    _target_: train_utils.wandb_logger.WandbLogger
+    path: ${logging.log_dir}/wandb
+    project: vggt_multi
+    entity: null
+    name: ${exp_name}
+    mode: disabled
+    resume: null
+  scalar_keys_to_log:
+    train:
+      keys_to_log:
+        - loss_objective
+    val:
+      keys_to_log:
+        - loss_objective
+
+
+checkpoint:
+  save_dir: logs/${exp_name}/ckpts
+  save_freq: 100
+  save_step_freq: 5000
+  resume_checkpoint_path: ""
+  strict: False
+  load_aggregator_only: False
+
+
+loss:
+  _target_: loss.MultitaskLoss
+  camera:
+    weight: 5.0
+    loss_type: "l1"
+  depth: null
+  smpl:
+    weight: 1.0
+    loss_type: l1
+    loss_type_joints2d: l2
+    loss_type_joints3d: l2
+
+    weight_pose: 1.0
+    weight_beta: 0.001
+    init_w: 1.0
+    weight_joints2d: 5.0
+    weight_joints3d: 5.0
+    weight_vertices: 1.5
+    weight_trans: 0.0
+    weight_mesh_translate: 1.0
+    weight_presence: 0.5
+    presence_loss_type: focal
+    presence_focal_alpha: null
+    presence_focal_gamma: 2.0
+
+    use_gt: False
+    normalize_cam: True
+    use_hungarian: True
+    hungarian_cost_pose_weight: 1.0
+    hungarian_cost_beta_weight: 0.1
+    hungarian_cost_trans_weight: 0.0
+    hungarian_cost_mesh_trans_weight: 0.3
+    hungarian_cost_presence_weight: 0.05
+  track: null
+
+
+optim:
+  param_group_modifiers: False
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 1e-4
+    weight_decay: 0.05
+  frozen_module_names:
+  amp:
+    enabled: True
+    amp_dtype: bfloat16
+  gradient_clip:
+    _target_: train_utils.gradient_clip.GradientClipper
+    configs:
+      - module_name: ["aggregator"]
+        max_norm: 1.0
+        norm_type: 2
+  options:
+    lr:
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.ConstantParamScheduler
+          value: 1e-4
+    weight_decay:
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.ConstantParamScheduler
+          value: 0.05
+
+
+max_epochs: 50
+
+model:
+  _target_: vggt.models.vggt.VGGT
+  enable_camera: True
+  enable_depth: False
+  enable_point: False
+  enable_track: False
+  enable_smpl: False
+  enable_smpl_multi_query: False
+  enable_smpl_multi_query_trans: False
+  enable_smpl_multi_query_trans_rot: True
+  smpl_num_people: 20
+
+distributed:
+  backend: nccl
+  comms_dtype: None
+  find_unused_parameters: True
+  timeout_mins: 30
+  gradient_as_bucket_view: True
+  bucket_cap_mb: 25
+  broadcast_buffers: True
+
+cuda:
+    cudnn_deterministic: False
+    cudnn_benchmark: False
+    allow_tf32: True

@@ -1,0 +1,92 @@
+# Python cache / local tooling
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Local environments
+.env
+.env.*
+.venv/
+venv/
+env/
+
+# Training / experiment outputs
+logs/
+training/logs/
+wandb/
+tensorboard/
+lightning_logs/
+runs/
+outputs/
+checkpoints/
+ckpts/
+**/ckpts/
+**/checkpoints/
+
+# Model weights and checkpoints
+ckpt/
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.onnx
+
+# Large/proprietary body-model assets
+smpl_models/
+smplx_models/
+*.pkl
+*.npz
+
+# Debug, demo, and visualization artifacts
+debug_outputs/
+attn_out/
+attn_out_mv/
+.gradio/
+.gradio_cache/
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.mp4
+*.mov
+*.avi
+*.glb
+*.obj
+*.ply
+
+# Datasets and generated data dumps
+data/
+datasets/
+dataset/
+SMPL_multi_dataset/
+Mamma_mv_split/
+*.data.pyd
+*.mask.jpg
+
+# Archives / bulky transfers
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+*.rar
+
+# Logs and temporary files
+*.log
+*.out
+*.err
+tmp/
+temp/
+*.tmp
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
