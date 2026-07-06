@@ -40,6 +40,7 @@ smpl_models/
 smplx_models/
 *.pkl
 *.npz
+!training/data/assets/verts_512.pkl
 
 # Debug, demo, and visualization artifacts
 debug_outputs/
@@ -60,9 +61,9 @@ attn_out_mv/
 *.ply
 
 # Datasets and generated data dumps
-data/
-datasets/
-dataset/
+/data/
+/datasets/
+/dataset/
 SMPL_multi_dataset/
 Mamma_mv_split/
 *.data.pyd
