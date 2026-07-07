@@ -43,7 +43,8 @@ class MultitaskLoss(torch.nn.Module):
     - SMPL loss
     - Tracking loss (not cleaned yet, dirty code is at the bottom of this file)
     """
-    def __init__(self, camera=None, depth=None, point=None, track=None, smpl=None, **kwargs):
+    def __init__(self, camera=None, depth=None, point=None, track=None, smpl=None,
+                 smplx_model_dir=None, **kwargs):
         super().__init__()
         # Loss configuration dictionaries for each task
         self.camera = camera
@@ -51,6 +52,11 @@ class MultitaskLoss(torch.nn.Module):
         self.point = point
         self.track = track
         self.smpl = smpl
+        # Optional config override for the SMPL-X model.pkl base dir (use_mamma=True).
+        # <smplx_model_dir>/{female,male,neutral}/model.pkl; None keeps the bundled path.
+        if smplx_model_dir is not None:
+            from training.smpl_body import set_smplx_model_root
+            set_smplx_model_root(smplx_model_dir)
 
     def forward(self, predictions, batch) -> torch.Tensor:
         """

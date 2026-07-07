@@ -193,8 +193,24 @@ class DynamicBatchSampler(Sampler):
                 break  # End of sampler's iterator
 
     def __len__(self):
-        # Return a large dummy length
-        return 1000000
+        # Real (estimated) number of batches per epoch, so the trainer's
+        # `iters_per_epoch = len(loader)` — and therefore the lr schedule's
+        # `where = exact_epoch / max_epochs` — is correct when
+        # limit_train_batches is null (auto). Previously this returned a dummy
+        # 1_000_000, which made `where` advance only ~1/1e6 per step and froze the
+        # intra-epoch lr.
+        #
+        # Each batch consumes `batch_size = floor(max_img_per_gpu / image_num)`
+        # samples, with image_num drawn from `possible_nums`. Batches per epoch =
+        # samples_per_replica / mean(batch_size). With a fixed img_nums (e.g.
+        # [4, 4]) mean(batch_size) is a single value, so this is exact; with a
+        # range it is an expectation (batch count is genuinely stochastic then).
+        num_samples = len(self.sampler)  # per-replica (DistributedSampler)
+        batch_sizes = [max(1, int(self.max_img_per_gpu // int(num))) for num in self.possible_nums]
+        mean_batch_size = float(np.dot(self.normalized_weights, batch_sizes))
+        if mean_batch_size <= 0:
+            return 1
+        return max(1, int(np.ceil(num_samples / mean_batch_size)))
 
 
 class DynamicDistributedSampler(DistributedSampler):

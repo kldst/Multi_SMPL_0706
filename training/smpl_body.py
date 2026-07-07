@@ -59,6 +59,23 @@ _SMPLX_MODEL_PATHS = {
 }
 _SMPLX_MODEL_CACHE = {}
 
+
+def set_smplx_model_root(root) -> None:
+    """Override the base directory for the per-gender SMPL-X ``model.pkl`` files.
+
+    Expects ``<root>/{female,male,neutral}/model.pkl`` (same layout as the bundled
+    ``smplx_models/``). Config-driven via ``loss.smplx_model_dir``. Clears the model
+    cache so a later decode reloads from the new location. ``None`` is a no-op (keeps
+    the default paths).
+    """
+    if root is None:
+        return
+    root = Path(root).expanduser()
+    for gender_key in ("female", "male", "neutral"):
+        _SMPLX_MODEL_PATHS[gender_key] = str(root / gender_key / "model.pkl")
+    _SMPLX_MODEL_CACHE.clear()
+
+
 def _normalize_gender_string(gender: str) -> str:
     token = str(gender).strip().lower()
     if token.startswith("m"):
