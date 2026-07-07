@@ -158,7 +158,7 @@ logging:
 
 checkpoint:
   save_dir: logs/${exp_name}/ckpts
-  save_freq: 5           # save every few epochs
+  save_freq: 50           # save every few epochs
   save_step_freq: null   # epoch-based saving for real training
   # Load the pretrained aggregator from the local base ckpt (heads incl.
   # landmark/mask are random-init and not in the ckpt). Set to null to skip.
@@ -214,7 +214,7 @@ loss:
     contact_focal_gamma: 2.0
     weight_mask: 1.0
 
-    use_gt: True
+    use_gt: False
     normalize_cam: True
     # When True, decode predicted/GT 3D joints + vertices with the SMPL-X NPZ
     # models in smplx_models/ (torch port of Scripts/process_mamma_syn.py), so the
@@ -279,7 +279,7 @@ optim:
           value: 0.01
 
 
-max_epochs: 100   # real (small) training on the full Mamma_mv_split
+max_epochs: 500   # real (small) training on the full Mamma_mv_split
 
 model:
   _target_: vggt.models.vggt.VGGT
