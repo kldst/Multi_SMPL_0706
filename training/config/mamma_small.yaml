@@ -9,7 +9,7 @@ seed_value: 42
 accum_steps: 1
 patch_size: 14
 val_epoch_freq: 5         # validate on the test split every few epochs
-max_img_per_gpu: 60        # 4 views per sample (seqs have 8; we sample 4)
+max_img_per_gpu: 40        # 4 views per sample (seqs have 8; we sample 4)
 
 # Full Mamma_mv_split: 34 train seqs / 6 test seqs (all 2-person, 8 views each).
 # limit_*_batches: null -> iterate the whole split each epoch. Set an int to cap.
