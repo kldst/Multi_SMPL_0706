@@ -14,14 +14,14 @@ exp_name: mamma_full
 #*   limit_train_batches: 20        # (below) also cap steps/epoch
 #* REAL run: set the two train knobs back to null and limit_train_batches: null.
 #* TRAIN caps (null = full data):
-debug_max_sequences: 3
-debug_max_frames_per_sequence: 2
-debug_val_max_sequences: 30
-debug_val_max_frames_per_sequence: 5
+# debug_max_sequences: 3
+# debug_max_frames_per_sequence: 2
+# debug_val_max_sequences: 30
+# debug_val_max_frames_per_sequence: 5
 # ----------------------------------------------------------------------------
 
 img_size: 518
-num_workers: 8            # real run: parallelise the (slow) pyd reads
+num_workers: 0            # real run: parallelise the (slow) pyd reads
 seed_value: 42
 accum_steps: 1            # raise for a larger effective batch (grad accumulation)
 patch_size: 14

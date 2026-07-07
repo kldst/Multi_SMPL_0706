@@ -4,7 +4,7 @@ defaults:
 # torchrun --standalone --nproc_per_node=1 launch.py --config mamma_small
 exp_name: mamma_small
 img_size: 518
-num_workers: 4            # real training: prefetch across workers
+num_workers: 0            # real training: prefetch across workers
 seed_value: 42
 accum_steps: 1
 patch_size: 14
