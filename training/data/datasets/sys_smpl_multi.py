@@ -499,12 +499,14 @@ class SysSMPLMultiDataset(BaseDataset):
             )
 
         # 3) Persist for next time (best-effort; a cache failure is never fatal).
-        #    Under DDP every rank builds and tries to write the SAME cache_path, so
-        #    the tmp file is made unique per process (pid) — otherwise one rank
-        #    renames the shared tmp away and the others' os.replace hits ENOENT.
-        #    os.replace onto the final path is atomic; last writer wins (identical
-        #    content). Skip the write entirely if another rank already produced it.
-        if cache_path is not None and not cache_path.is_file():
+        #    Under DDP every rank builds the same index, so let only ONE process per
+        #    node (LOCAL_RANK 0) write — avoids N ranks interleaving into the same
+        #    file (which previously produced a corrupt cache). The writer ALWAYS
+        #    rewrites (no is_file guard) so a corrupt/partial cache from an older run
+        #    self-heals. Unique per-pid tmp + atomic os.replace means a crash
+        #    mid-write never leaves a half-written final file.
+        is_cache_writer = os.environ.get("LOCAL_RANK", os.environ.get("RANK", "0")) == "0"
+        if cache_path is not None and is_cache_writer:
             tmp_path = cache_path.with_name(f"{cache_path.name}.tmp.{os.getpid()}")
             try:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
