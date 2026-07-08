@@ -61,9 +61,9 @@ data:
       dataset_configs:
         - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
           split: train
-          SysSMPL_DIR: /dataset/mamma
-          SysSMPL_ANNOTATION_DIR: /dataset/mamma
-          max_num_people: 2   # dataset smpl query 數量
+          SysSMPL_DIR: /dataset/mamma/moyo_4-6_C_200_00
+          SysSMPL_ANNOTATION_DIR: /dataset/mamma/moyo_4-6_C_200_00
+          max_num_people: 6   # dataset smpl query 數量
           min_num_images: 4
           emit_landmarks: True
           emit_person_mask: True
@@ -92,9 +92,9 @@ data:
       dataset_configs:
         - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
           split: test
-          SysSMPL_DIR: /dataset/mamma
-          SysSMPL_ANNOTATION_DIR: /dataset/mamma
-          max_num_people: 2
+          SysSMPL_DIR: /dataset/mamma/moyo_4-6_C_200_00
+          SysSMPL_ANNOTATION_DIR: /dataset/mamma/moyo_4-6_C_200_00
+          max_num_people: 6
           min_num_images: 4
           emit_landmarks: True
           emit_person_mask: True
