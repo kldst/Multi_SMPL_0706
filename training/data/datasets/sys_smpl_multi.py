@@ -499,16 +499,26 @@ class SysSMPLMultiDataset(BaseDataset):
             )
 
         # 3) Persist for next time (best-effort; a cache failure is never fatal).
-        if cache_path is not None:
+        #    Under DDP every rank builds and tries to write the SAME cache_path, so
+        #    the tmp file is made unique per process (pid) — otherwise one rank
+        #    renames the shared tmp away and the others' os.replace hits ENOENT.
+        #    os.replace onto the final path is atomic; last writer wins (identical
+        #    content). Skip the write entirely if another rank already produced it.
+        if cache_path is not None and not cache_path.is_file():
+            tmp_path = cache_path.with_name(f"{cache_path.name}.tmp.{os.getpid()}")
             try:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
-                tmp_path = cache_path.with_suffix(".pkl.tmp")
                 with open(tmp_path, "wb") as f:
                     pickle.dump(data_store, f, protocol=pickle.HIGHEST_PROTOCOL)
                 os.replace(tmp_path, cache_path)
                 logging.info("SysSMPLMulti: wrote index cache -> %s", cache_path)
             except Exception as e:
                 logging.warning("SysSMPLMulti: failed to write index cache %s (%s)", cache_path, e)
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except OSError:
+                    pass
 
         return data_store
 
