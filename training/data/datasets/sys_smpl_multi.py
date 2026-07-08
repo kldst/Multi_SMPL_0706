@@ -273,7 +273,12 @@ class SysSMPLMultiDataset(BaseDataset):
             return {}
 
         data_store: Dict[str, List[Dict[str, np.ndarray]]] = {}
-        for seq_dir in seq_dirs:
+        total_seqs = len(seq_dirs)
+        logging.info(
+            "SysSMPLMulti: building index over %d sequences (serial, reads 1 pyd per frame/view)...",
+            total_seqs,
+        )
+        for seq_i, seq_dir in enumerate(seq_dirs, 1):
             grouped = self._group_raw_mamma_frames(seq_dir)
             frame_items = sorted(grouped.items())
             if self.max_frames_per_sequence is not None:
@@ -343,6 +348,12 @@ class SysSMPLMultiDataset(BaseDataset):
                     except ValueError:
                         pass
                     data_store[f"raw_mamma_{rel}_frame_{frame}"] = view_annos
+
+            if seq_i % 20 == 0 or seq_i == total_seqs:
+                logging.info(
+                    "SysSMPLMulti: built %d/%d sequences (%d frames so far)",
+                    seq_i, total_seqs, len(data_store),
+                )
 
         return data_store
 
