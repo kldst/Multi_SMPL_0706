@@ -250,7 +250,7 @@ optim:
 
   optimizer:
     _target_: torch.optim.AdamW
-    lr: 2e-4
+    lr: 1e-4
     weight_decay: 0.0        # real run: consider a small wd (e.g. 0.01)
 
   # Aggregator stays frozen (only the heads train), matching the overfit setup.
