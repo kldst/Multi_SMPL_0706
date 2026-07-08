@@ -6,7 +6,7 @@ import pickle
 import random
 from functools import partial
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -283,16 +283,31 @@ class SysSMPLMultiDataset(BaseDataset):
         data_root: Path,
         min_num_images: int,
         max_frames_per_sequence: Optional[int],
-    ) -> Dict[str, List[Dict[str, np.ndarray]]]:
+    ) -> Tuple[Dict[str, List[Dict[str, np.ndarray]]], List[str]]:
         """Build the metadata entries for a SINGLE sequence dir.
 
         Reads one pyd per (frame, view) but keeps only small metadata
         (pose/beta/trans + per-view camera + paths). Extracted as a pure
         staticmethod (uses only static helpers + its args) so it can run in a
-        multiprocessing worker; returns the partial data_store for this seq.
+        multiprocessing worker.
+
+        Returns ``(local_store, bad_files)``. Individual pyds that fail to
+        unpickle (corrupt/partial/wrong-format) or have an unexpected schema are
+        skipped and their paths collected in ``bad_files`` instead of raising, so
+        one bad file cannot kill the whole build. The caller logs a summary.
         """
         cls = SysSMPLMultiDataset
         local_store: Dict[str, List[Dict[str, np.ndarray]]] = {}
+        bad_files: List[str] = []
+
+        def _try_load(path: Path):
+            try:
+                obj = cls._load_pickle(path)
+            except Exception:  # corrupt / truncated / non-pickle / read error
+                bad_files.append(str(path))
+                return None
+            return obj if (isinstance(obj, dict) and obj) else None
+
         grouped = cls._group_raw_mamma_frames(seq_dir)
         frame_items = sorted(grouped.items())
         if max_frames_per_sequence is not None:
@@ -301,22 +316,26 @@ class SysSMPLMultiDataset(BaseDataset):
             if len(views) < min_num_images:
                 continue
 
-            first_people = cls._load_pickle(seq_dir / views[0] / f"{frame}.data.pyd")
-            if not isinstance(first_people, dict) or not first_people:
+            first_people = _try_load(seq_dir / views[0] / f"{frame}.data.pyd")
+            if first_people is None:
                 continue
-            person_ids = sorted(first_people.keys(), key=lambda item: int(item))
-            people_params = {}
-            for person_id in person_ids:
-                person = first_people[person_id]
-                people_params[person_id] = {
-                    "person_key": f"person_{int(person_id):02d}",
-                    "smpl_pose": np.asarray(person["pose_world"], dtype=np.float32).reshape(-1)[:72],
-                    "smpl_beta": np.asarray(person["shape"], dtype=np.float32).reshape(-1)[:10],
-                    "smpl_trans": np.asarray(person["trans_world"], dtype=np.float32).reshape(-1)[:3],
-                    "gender": person.get("gender", "neutral"),
-                    # instance-mask value for this person == person_idx + 1.
-                    "person_idx": int(person.get("person_idx", int(person_id))),
-                }
+            try:
+                person_ids = sorted(first_people.keys(), key=lambda item: int(item))
+                people_params = {}
+                for person_id in person_ids:
+                    person = first_people[person_id]
+                    people_params[person_id] = {
+                        "person_key": f"person_{int(person_id):02d}",
+                        "smpl_pose": np.asarray(person["pose_world"], dtype=np.float32).reshape(-1)[:72],
+                        "smpl_beta": np.asarray(person["shape"], dtype=np.float32).reshape(-1)[:10],
+                        "smpl_trans": np.asarray(person["trans_world"], dtype=np.float32).reshape(-1)[:3],
+                        "gender": person.get("gender", "neutral"),
+                        # instance-mask value for this person == person_idx + 1.
+                        "person_idx": int(person.get("person_idx", int(person_id))),
+                    }
+            except Exception:  # unexpected pyd schema -> skip this frame
+                bad_files.append(str(seq_dir / views[0] / f"{frame}.data.pyd"))
+                continue
 
             view_annos = []
             for view_name in views:
@@ -324,11 +343,15 @@ class SysSMPLMultiDataset(BaseDataset):
                 image_path = cls._raw_image_path(seq_dir, view_name, frame)
                 if image_path is None or not data_path.is_file():
                     continue
-                frame_people = cls._load_pickle(data_path)
-                if not isinstance(frame_people, dict) or not frame_people:
+                frame_people = _try_load(data_path)
+                if frame_people is None:
                     continue
-                cam_person = next(iter(frame_people.values()))
-                camera = cls._parse_camera(cam_person["cam_int"], cam_person["cam_ext"])
+                try:
+                    cam_person = next(iter(frame_people.values()))
+                    camera = cls._parse_camera(cam_person["cam_int"], cam_person["cam_ext"])
+                except Exception:  # unexpected pyd schema -> skip this view
+                    bad_files.append(str(data_path))
+                    continue
                 if camera is None:
                     continue
 
@@ -363,7 +386,7 @@ class SysSMPLMultiDataset(BaseDataset):
                     pass
                 local_store[f"raw_mamma_{rel}_frame_{frame}"] = view_annos
 
-        return local_store
+        return local_store, bad_files
 
     def _index_cache_path(self, seq_dirs: List[Path]) -> Path:
         """Path of the on-disk index cache for this exact build config.
@@ -438,14 +461,15 @@ class SysSMPLMultiDataset(BaseDataset):
         )
 
         data_store: Dict[str, List[Dict[str, np.ndarray]]] = {}
+        bad_files: List[str] = []
         total = len(seq_dirs)
         if n_workers == 1:
             for i, seq_dir in enumerate(seq_dirs, 1):
-                data_store.update(
-                    self._process_one_seq(
-                        seq_dir, self.data_root, self.min_num_images, self.max_frames_per_sequence
-                    )
+                local_store, bad = self._process_one_seq(
+                    seq_dir, self.data_root, self.min_num_images, self.max_frames_per_sequence
                 )
+                data_store.update(local_store)
+                bad_files.extend(bad)
                 if i % 50 == 0 or i == total:
                     logging.info("SysSMPLMulti: built %d/%d sequences", i, total)
         else:
@@ -458,11 +482,21 @@ class SysSMPLMultiDataset(BaseDataset):
             ctx = mp.get_context("fork")
             done = 0
             with ctx.Pool(n_workers) as pool:
-                for local_store in pool.imap_unordered(worker, seq_dirs, chunksize=1):
+                for local_store, bad in pool.imap_unordered(worker, seq_dirs, chunksize=1):
                     data_store.update(local_store)
+                    bad_files.extend(bad)
                     done += 1
                     if done % 50 == 0 or done == total:
                         logging.info("SysSMPLMulti: built %d/%d sequences", done, total)
+
+        if bad_files:
+            examples = ", ".join(bad_files[:5])
+            logging.warning(
+                "SysSMPLMulti: skipped %d unreadable/corrupt pyd file(s) during build "
+                "(e.g. %s). If this count is a large fraction of the dataset it likely "
+                "signals a format/loader mismatch, not just a few bad files.",
+                len(bad_files), examples,
+            )
 
         # 3) Persist for next time (best-effort; a cache failure is never fatal).
         if cache_path is not None:
