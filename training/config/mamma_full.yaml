@@ -16,10 +16,10 @@ exp_name: mamma_full
 #* TRAIN caps (null = full data). These MUST stay defined (uncommented) because
 #* the dataset configs below reference them via ${debug_*}. For a FAST smoke test
 #* set them to small ints (e.g. 3 / 2 / 30 / 5) + limit_train_batches: 20.
-debug_max_sequences: null
-debug_max_frames_per_sequence: null
-debug_val_max_sequences: null
-debug_val_max_frames_per_sequence: null
+debug_max_sequences: 3
+debug_max_frames_per_sequence: 2
+debug_val_max_sequences: 3
+debug_val_max_frames_per_sequence: 2
 # ----------------------------------------------------------------------------
 
 img_size: 518
@@ -108,7 +108,7 @@ data:
 
 logging:
   log_dir: logs/${exp_name}
-  use_wandb: False
+  use_wandb: True
   log_visuals: False
   log_freq: 50
   log_level_primary: INFO
