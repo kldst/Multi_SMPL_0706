@@ -97,6 +97,23 @@ def default_worker_init_fn(worker_id, num_workers, epoch, seed=0):
     torch.random.manual_seed(worker_seed)
     np.random.seed(worker_seed)
     random.seed(worker_seed)
+
+    # Pin each dataloader worker to a single CPU thread. get_data() runs a torch
+    # SMPL-X decode (and cv2 image ops) per sample; without this, every worker's
+    # torch/cv2 grabs ALL cores, so N workers (x world_size ranks) massively
+    # oversubscribe the CPU and each step gets SLOWER than num_workers=0.
+    # Parallelism must come from having many workers, not many threads per worker.
+    try:
+        torch.set_num_threads(1)
+    except Exception:
+        pass
+    for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        os.environ.setdefault(_var, "1")
+    try:
+        import cv2
+        cv2.setNumThreads(0)
+    except Exception:
+        pass
     return
 
 def get_worker_init_fn(seed, num_workers, epoch, worker_init_fn=None):

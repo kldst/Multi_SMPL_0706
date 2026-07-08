@@ -1,7 +1,7 @@
 defaults:
   - default_dataset_smpl.yaml
 
-# export CUDA_VISIBLE_DEVICES=2          # 挑一張空的 GPU
+# export CUDA_VISIBLE_DEVICES=2          
 # export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # export PYTHONPATH=/mnt/train-data-4-hdd/yian/vggt_multi_0621_mamma_demo_eval_bundle:/mnt/train-data-4-hdd/yian/vggt_multi_0621_mamma_demo_eval_bundle/training
 # torchrun --standalone --nproc_per_node=1 launch.py --config mamma_full
@@ -23,7 +23,11 @@ debug_val_max_frames_per_sequence: null
 # ----------------------------------------------------------------------------
 
 img_size: 518
-num_workers: 0            # real run: parallelise the (slow) pyd reads during training
+# Per-step data prep runs a torch SMPL-X decode + cv2 image ops. Each worker is
+# pinned to 1 CPU thread (worker_fn.default_worker_init_fn) so workers don't
+# oversubscribe the CPU. Keep  num_workers * nproc_per_node  <= physical cores
+# (leave a few for the main procs). 0 = load in the main process (no prefetch).
+num_workers: 0
 # Parallelism for the ONE-TIME dataset index build (reads 1 pyd per (frame,view)).
 # null = auto (min(cpu,8)). The built index is cached to disk so later runs skip
 # the build entirely (dir: $MAMMA_INDEX_CACHE_DIR or ~/.cache/vggt_mamma_index).
@@ -32,7 +36,7 @@ seed_value: 42
 accum_steps: 1            # raise for a larger effective batch (grad accumulation)
 patch_size: 14
 val_epoch_freq: 5
-max_img_per_gpu: 40        # 4 views/sample -> batch_size = floor(4/4) = 1 sample/step
+max_img_per_gpu: 4        # 4 views/sample -> batch_size = floor(4/4) = 1 sample/step
 
 # Full epoch = one pass over all samples (~50,648 steps on 1 GPU, /world_size on N).
 # Set to an int to cap steps/epoch (as the overfit config did with 1000).
@@ -65,8 +69,8 @@ data:
       dataset_configs:
         - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
           split: train
-          SysSMPL_DIR: /dataset/mamma
-          SysSMPL_ANNOTATION_DIR: /dataset/mamma
+          SysSMPL_DIR: /mnt/train-data-4-hdd/yian/SMPL_multi_dataset/mamma
+          SysSMPL_ANNOTATION_DIR: /mnt/train-data-4-hdd/yian/SMPL_multi_dataset/mamma
           max_num_people: 6   # dataset smpl query 數量
           min_num_images: 4
           emit_landmarks: True
@@ -98,8 +102,8 @@ data:
       dataset_configs:
         - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
           split: test
-          SysSMPL_DIR: /dataset/mamma
-          SysSMPL_ANNOTATION_DIR: /dataset/mamma
+          SysSMPL_DIR: /mnt/train-data-4-hdd/yian/SMPL_multi_dataset/mamma
+          SysSMPL_ANNOTATION_DIR: /mnt/train-data-4-hdd/yian/SMPL_multi_dataset/mamma
           max_num_people: 6
           min_num_images: 4
           emit_landmarks: True
@@ -183,14 +187,14 @@ checkpoint:
   save_dir: logs/${exp_name}/ckpts
   save_freq: 1              # epochs (a full epoch is huge; step_freq is the real knob)
   save_step_freq: 5000      # checkpoint every 2000 optimizer steps
-  resume_checkpoint_path: "/dataset/vggt/model.pt"
+  resume_checkpoint_path: "/mnt/train-data-4-hdd/yian/vggt_multi_0621_mamma_demo_eval_bundle/ckpt/model.pt"
   strict: False
   load_aggregator_only: False
 
 
 loss:
   _target_: loss.MultitaskLoss
-  smplx_model_dir: /dataset/smplx_models
+  smplx_model_dir: /mnt/train-data-4-hdd/yian/vggt_multi_0621_mamma_demo_eval_bundle/smplx_models
   camera:
     weight: 5.0
     loss_type: "l1"
