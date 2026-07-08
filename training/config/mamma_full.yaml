@@ -23,15 +23,7 @@ debug_val_max_frames_per_sequence: null
 # ----------------------------------------------------------------------------
 
 img_size: 518
-# Per-step data prep runs a torch SMPL-X decode + cv2 image ops. Each worker is
-# pinned to 1 CPU thread (worker_fn.default_worker_init_fn) so workers don't
-# oversubscribe the CPU. Keep  num_workers * nproc_per_node  <= physical cores
-# (leave a few for the main procs). 0 = load in the main process (no prefetch).
-num_workers: 0
-# Parallelism for the ONE-TIME dataset index build (reads 1 pyd per (frame,view)).
-# null = auto (min(cpu,8)). The built index is cached to disk so later runs skip
-# the build entirely (dir: $MAMMA_INDEX_CACHE_DIR or ~/.cache/vggt_mamma_index).
-build_workers: null
+num_workers: 0            # 0 = load in the main process (original behaviour)
 seed_value: 42
 accum_steps: 1            # raise for a larger effective batch (grad accumulation)
 patch_size: 14
@@ -69,8 +61,8 @@ data:
       dataset_configs:
         - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
           split: train
-          SysSMPL_DIR: /mnt/train-data-4-hdd/yian/SMPL_multi_dataset/mamma
-          SysSMPL_ANNOTATION_DIR: /mnt/train-data-4-hdd/yian/SMPL_multi_dataset/mamma
+          SysSMPL_DIR: /dataset/mamma
+          SysSMPL_ANNOTATION_DIR: /dataset/mamma
           max_num_people: 6   # dataset smpl query 數量
           min_num_images: 4
           emit_landmarks: True
@@ -81,8 +73,6 @@ data:
           # smoke-test caps (null = full data). Toggle via debug_max_* at top of file.
           max_sequences: ${debug_max_sequences}
           max_frames_per_sequence: ${debug_max_frames_per_sequence}
-          # index-build parallelism (null = auto). Built index is cached to disk.
-          build_workers: ${build_workers}
   val:
     _target_: data.dynamic_dataloader.DynamicTorchDataset
     num_workers: ${num_workers}
@@ -102,8 +92,8 @@ data:
       dataset_configs:
         - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
           split: test
-          SysSMPL_DIR: /mnt/train-data-4-hdd/yian/SMPL_multi_dataset/mamma
-          SysSMPL_ANNOTATION_DIR: /mnt/train-data-4-hdd/yian/SMPL_multi_dataset/mamma
+          SysSMPL_DIR: /dataset/mamma
+          SysSMPL_ANNOTATION_DIR: /dataset/mamma
           max_num_people: 6
           min_num_images: 4
           emit_landmarks: True
@@ -114,7 +104,6 @@ data:
           # val caps (independent debug switch at top of file).
           max_sequences: ${debug_val_max_sequences}
           max_frames_per_sequence: ${debug_val_max_frames_per_sequence}
-          build_workers: ${build_workers}
 
 
 logging:
@@ -187,14 +176,14 @@ checkpoint:
   save_dir: logs/${exp_name}/ckpts
   save_freq: 1              # epochs (a full epoch is huge; step_freq is the real knob)
   save_step_freq: 5000      # checkpoint every 2000 optimizer steps
-  resume_checkpoint_path: "/mnt/train-data-4-hdd/yian/vggt_multi_0621_mamma_demo_eval_bundle/ckpt/model.pt"
+  resume_checkpoint_path: "/dataset/vggt/model.pt"
   strict: False
   load_aggregator_only: False
 
 
 loss:
   _target_: loss.MultitaskLoss
-  smplx_model_dir: /mnt/train-data-4-hdd/yian/vggt_multi_0621_mamma_demo_eval_bundle/smplx_models
+  smplx_model_dir: /dataset/smplx_models
   camera:
     weight: 5.0
     loss_type: "l1"
