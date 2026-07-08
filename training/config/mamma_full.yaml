@@ -23,7 +23,7 @@ debug_val_max_frames_per_sequence: null
 # ----------------------------------------------------------------------------
 
 img_size: 518
-num_workers: 8            # real run: parallelise the (slow) pyd reads during training
+num_workers: 0            # real run: parallelise the (slow) pyd reads during training
 # Parallelism for the ONE-TIME dataset index build (reads 1 pyd per (frame,view)).
 # null = auto (min(cpu,8)). The built index is cached to disk so later runs skip
 # the build entirely (dir: $MAMMA_INDEX_CACHE_DIR or ~/.cache/vggt_mamma_index).
