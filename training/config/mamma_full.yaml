@@ -29,9 +29,8 @@ accum_steps: 1            # raise for a larger effective batch (grad accumulatio
 patch_size: 14
 val_epoch_freq: 5
 # enable_val: False 會完全跳過 val dataset 的建立(省去昂貴的 raw-mamma pyd
-# 冷讀),run_val() 直接 no-op。只想跑 train 時設 False。
-enable_val: False
-max_img_per_gpu: 40        # 4 views/sample -> batch_size = floor(4/4) = 1 sample/step
+# 冷讀),run_val() 直接 no-op。只想跑 train 時設 Falseenable_val: Fals
+max_img_per_gpu: 16        # 4 views/sample -> batch_size = floor(4/4) = 1 sample/step
 
 # Full epoch = one pass over all samples (~50,648 steps on 1 GPU, /world_size on N).
 # Set to an int to cap steps/epoch (as the overfit config did with 1000).
