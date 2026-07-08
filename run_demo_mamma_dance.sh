@@ -34,17 +34,18 @@ if [[ "$DEMO_MODE" == "dance" ]]; then
   DATASET_SPLIT="${DATASET_SPLIT:-test}"
   export DEMO_IMAGE_IDS="${DEMO_IMAGE_IDS:-0 1 2 3 4 5 6 7}"
 else
-  CONFIG="${CONFIG:-mamma_overfit}"
-  CHECKPOINT="${CHECKPOINT:-$REPO_DIR/training/logs/mamma_overfit_newlandmark/ckpts/checkpoint_2700.pt}"
-  # demo_gradio_smpl_multi.py can treat a raw sequence directory itself as the
-  # dataset root; the UI will expose it as the single run ".".
-  DATASET_ROOT="${DATASET_ROOT:-$OVERFIT_SCENE_DEFAULT}"
+  # mamma_small: trained on the raw Mamma_mv_split dataset (smpl_num_people:6,
+  # img_nums:[4,4]). CONFIG must be mamma_small so the model architecture matches
+  # the checkpoint (mamma_overfit uses smpl_num_people:2 -> shape mismatch).
+  CONFIG="${CONFIG:-mamma_small}"
+  CHECKPOINT="${CHECKPOINT:-$REPO_DIR/training/logs/mamma_small/checkpoint_450.pt}"
+  # Raw Mamma_mv_split root; the demo globs */*/png under <root>/<split> to find
+  # scene sequences (e.g. test/tmp/<batch>/<dataset>/png/<seq>).
+  DATASET_ROOT="${DATASET_ROOT:-/mnt/train-data-4-hdd/yian/Mamma_mv_split}"
   DATASET_SPLIT="${DATASET_SPLIT:-test}"
-  # The overfit model was trained with img_nums:[8,8] -> every step saw ALL 8 views.
-  # VGGT predicts each camera jointly over the whole view set, so feeding fewer views
-  # is out-of-distribution and some cameras (e.g. IOI_18) mispredict / fly away. Feed
-  # all 8 views so inference matches training.
-  export DEMO_IMAGE_IDS="${DEMO_IMAGE_IDS:-0 1 2 3 4 5 6 7}"
+  # mamma_small trained with img_nums:[4,4] (4 of 8 views per sample), so feed 4
+  # views at inference to match the training distribution.
+  export DEMO_IMAGE_IDS="${DEMO_IMAGE_IDS:-0 1 2 3}"
 fi
 
 echo "[run_demo] mode=$DEMO_MODE config=$CONFIG"

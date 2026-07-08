@@ -86,6 +86,7 @@ class Trainer:
         device: str = "cuda",
         seed_value: int = 123,
         val_epoch_freq: int = 1,
+        enable_val: bool = True,
         distributed: Dict[str, bool] = None,
         cuda: Dict[str, bool] = None,
         limit_train_batches: Optional[int] = None,
@@ -135,6 +136,7 @@ class Trainer:
         self.max_epochs = max_epochs
         self.mode = mode
         self.val_epoch_freq = val_epoch_freq
+        self.enable_val = bool(enable_val)
         self.limit_train_batches = limit_train_batches
         self.limit_val_batches = limit_val_batches
         self.seed_value = seed_value
@@ -372,12 +374,17 @@ class Trainer:
         self.train_dataset = None
         self.val_dataset = None
 
-        if self.mode in ["train", "val"]:
+        # enable_val=False skips building the val dataset entirely (avoids the
+        # expensive raw-mamma pyd cold-read); run_val() then no-ops since
+        # self.val_dataset stays None.
+        if self.mode in ["train", "val"] and self.enable_val:
             self.val_dataset = instantiate(
                 self.data_conf.get('val', None), _recursive_=False
             )
             if self.val_dataset is not None:
                 self.val_dataset.seed = self.seed_value
+        elif self.mode == "val" and not self.enable_val:
+            logging.warning("mode='val' but enable_val=False; nothing to run.")
 
         if self.mode in ["train"]:
             self.train_dataset = instantiate(self.data_conf.train, _recursive_=False)

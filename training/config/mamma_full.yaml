@@ -28,6 +28,9 @@ seed_value: 42
 accum_steps: 1            # raise for a larger effective batch (grad accumulation)
 patch_size: 14
 val_epoch_freq: 5
+# enable_val: False 會完全跳過 val dataset 的建立(省去昂貴的 raw-mamma pyd
+# 冷讀),run_val() 直接 no-op。只想跑 train 時設 False。
+enable_val: False
 max_img_per_gpu: 40        # 4 views/sample -> batch_size = floor(4/4) = 1 sample/step
 
 # Full epoch = one pass over all samples (~50,648 steps on 1 GPU, /world_size on N).
@@ -250,11 +253,9 @@ optim:
     lr: 1e-4
     weight_decay: 0.0        # real run: consider a small wd (e.g. 0.01)
 
-  # Aggregator stays frozen (only the heads train), matching the overfit setup.
-  # To also fine-tune the backbone, remove "*aggregator*" here (much more memory,
-  # and drop the aggregator entry under gradient_clip accordingly / keep it).
-  frozen_module_names:
-      - "*aggregator*"
+  # Aggregator now ALSO trains (fine-tuned at a lower lr, see options.lr below).
+  # Much more memory than frozen. To re-freeze, add "*aggregator*" back here.
+  frozen_module_names: []
 
   amp:
     enabled: True
@@ -276,6 +277,20 @@ optim:
         norm_type: 2
   options:
     lr:
+      # Aggregator (backbone): fine-tune at a LOWER peak lr (1e-5).
+      - param_names: ["*aggregator*"]
+        scheduler:
+          _target_: fvcore.common.param_scheduler.CompositeParamScheduler
+          schedulers:
+            - _target_: fvcore.common.param_scheduler.LinearParamScheduler
+              start_value: 1e-9
+              end_value: 1e-5
+            - _target_: fvcore.common.param_scheduler.CosineParamScheduler
+              start_value: 1e-5
+              end_value: 1e-9
+          lengths: [0.05, 0.95]
+          interval_scaling: ['rescaled', 'rescaled']
+      # Default (everything else = the heads): peak lr from optim.optimizer.lr (1e-4).
       - scheduler:
           _target_: fvcore.common.param_scheduler.CompositeParamScheduler
           schedulers:

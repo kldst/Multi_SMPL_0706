@@ -1,0 +1,275 @@
+defaults:
+  - default_dataset_smpl.yaml
+
+
+exp_name: 0621_mamma
+img_size: 518
+num_workers: 8
+seed_value: 42
+accum_steps: 1
+patch_size: 14
+val_epoch_freq: 5
+max_img_per_gpu: 4
+
+limit_train_batches: 162
+limit_val_batches: 19
+
+
+data:
+  train:
+    _target_: data.dynamic_dataloader.DynamicTorchDataset
+    num_workers: ${num_workers}
+    max_img_per_gpu: ${max_img_per_gpu}
+    common_config:
+      img_size: ${img_size}
+      patch_size: ${patch_size}
+    dataset:
+      _target_: data.composed_dataset.ComposedDataset
+      dataset_configs:
+        - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
+          split: train
+          # Raw Mamma_mv_split root (ships vertices2d / vertex_visibility /
+          # *.mask.jpg) so dense-landmark + mask GT is produced. Both DIR and
+          # ANNOTATION_DIR point at the split root; _build_sequences auto-detects
+          # the raw layout png/<seq>/<IOI_view>/<frame>.data.pyd.
+          # For the old organized MAMMA_syn instead, point these at
+          # <root>/out_image and <root>/out_data (landmark/mask GT then absent).
+          SysSMPL_DIR: /mnt/train-data-4-hdd/yian/Mamma_mv_split/train
+          SysSMPL_ANNOTATION_DIR: /mnt/train-data-4-hdd/yian/Mamma_mv_split/train
+          max_num_people: 5   # keep <= model.smpl_num_people
+          min_num_images: 4   # 4 views per training sample
+          emit_landmarks: True       # 512 landmark GT (raw Mamma only)
+          emit_person_mask: True     # per-person instance mask GT (raw Mamma only)
+  val:
+    _target_: data.dynamic_dataloader.DynamicTorchDataset
+    num_workers: ${num_workers}
+    max_img_per_gpu: ${max_img_per_gpu}
+    common_config:
+      img_size: ${img_size}
+      patch_size: ${patch_size}
+    dataset:
+      _target_: data.composed_dataset.ComposedDataset
+      dataset_configs:
+        - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
+          split: test
+          SysSMPL_DIR: /mnt/train-data-4-hdd/yian/Mamma_mv_split/test
+          SysSMPL_ANNOTATION_DIR: /mnt/train-data-4-hdd/yian/Mamma_mv_split/test
+          max_num_people: 5   # keep <= model.smpl_num_people
+          min_num_images: 4
+          emit_landmarks: True
+          emit_person_mask: True
+
+
+logging:
+  log_dir: logs/${exp_name}
+  use_wandb: True
+  log_visuals: False
+  log_freq: 1
+  log_level_primary: DEBUG
+  log_level_secondary: WARNING
+  all_ranks: False
+  tensorboard_writer:
+    _target_: train_utils.tb_writer.TensorBoardLogger
+    path: ${logging.log_dir}/tensorboard
+  wandb_writer:
+    _target_: train_utils.wandb_logger.WandbLogger
+    path: ${logging.log_dir}/wandb
+    project: vggt_multi
+    entity: null
+    name: ${exp_name}
+    mode: online
+    resume: null
+  scalar_keys_to_log:
+    train:
+      keys_to_log:
+        - loss_objective
+        - loss_camera
+        - loss_T
+        - loss_R
+        - loss_FL
+        - loss_smpl
+        - loss_smpl_losses
+        - loss_smpl_trans
+        - loss_mesh_translate
+        - loss_smpl_presence
+        - loss_smpl_joints2d
+        - loss_smpl_joints3d
+        - loss_smpl_vertices
+        - loss_landmark
+        - loss_landmark_l2
+        - loss_mask
+        - mask_soft_iou
+        - smpl_presence_positive_prob_mean
+        - smpl_presence_empty_prob_mean
+        - smpl_joints2d_max_abs
+    val:
+      keys_to_log:
+        - loss_objective
+        - loss_camera
+        - loss_T
+        - loss_R
+        - loss_FL
+        - loss_smpl
+        - loss_smpl_losses
+        - loss_smpl_trans
+        - loss_mesh_translate
+        - loss_smpl_presence
+        - loss_smpl_joints2d
+        - loss_smpl_joints3d
+        - loss_smpl_vertices
+        - loss_landmark
+        - loss_landmark_l2
+        - loss_mask
+        - mask_soft_iou
+        - smpl_presence_positive_prob_mean
+        - smpl_presence_empty_prob_mean
+        - smpl_joints2d_max_abs
+
+
+
+checkpoint:
+  save_dir: logs/${exp_name}/ckpts
+  save_freq: 100
+  save_step_freq: 2000
+  resume_checkpoint_path: "/work/chen0409/vggt_multi/ckpt/model.pt"
+  strict: False
+  load_aggregator_only: False  
+
+
+loss:
+  _target_: loss.MultitaskLoss
+  camera: 
+    weight: 5.0
+    loss_type: "l1"
+  depth: null
+  smpl:
+    weight: 1.0
+    loss_type: l1
+    loss_type_joints2d: l2
+    loss_type_joints3d: l2
+
+    weight_pose: 1.0
+    weight_beta: 0.001
+    init_w: 1.0
+    weight_joints2d: 5.0
+    weight_joints3d: 5.0
+    weight_vertices: 1.5
+    weight_trans: 0.0
+    weight_mesh_translate: 1.0
+    weight_presence: 0.5
+    presence_loss_type: focal
+    presence_focal_alpha: null
+    presence_focal_gamma: 2.0
+
+    # Dense-landmark (direct 2D GNLL) + per-person mask (BCE). Computed inside
+    # compute_smpl_loss so they share the Hungarian matching + people-flatten.
+    weight_landmark: 1.0
+    landmark_loss_type: gnll   # gnll (predicts per-point logvar) | l2
+    weight_mask: 1.0
+
+    use_gt: False
+    normalize_cam: True
+    # When True, decode predicted/GT 3D joints + vertices with the SMPL-X NPZ
+    # models in smplx_models/ (torch port of Scripts/process_mamma_syn.py), so the
+    # supervision matches MAMMA ground truth (joints 22<-20, 23<-21).
+    use_mamma: True
+    use_hungarian: True
+    hungarian_cost_pose_weight: 1.0
+    hungarian_cost_beta_weight: 0.1
+    hungarian_cost_trans_weight: 0.0
+    hungarian_cost_mesh_trans_weight: 0.3
+    hungarian_cost_presence_weight: 0.05
+  track: null   
+
+
+
+
+optim:
+  param_group_modifiers: False
+
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 1e-4
+    weight_decay: 0.05
+
+  frozen_module_names:
+      # - "*aggregator*"  # example, freeze the aggregator
+      # - "*depth*"
+      - "*patch_embed*"   # freeze dinov2 backbone (ViT patch embed)
+
+  amp:
+    enabled: True
+    amp_dtype: bfloat16
+  gradient_clip:
+    _target_: train_utils.gradient_clip.GradientClipper
+    configs:
+      - module_name: ["aggregator"]
+        max_norm: 1.0   # feel free to reduce this if you see instabilities
+        norm_type: 2
+      - module_name: ["camera"]
+        max_norm: 1.0   # feel free to reduce this if you see instabilities
+        norm_type: 2
+      - module_name: ["smpl"]
+        max_norm: 1.0
+        norm_type: 2
+      # dense-landmark head matches "smpl" (smpl_dense_landmark_head); the mask
+      # head needs its own group or GradientClipper errors on unconfigured params.
+      - module_name: ["person_mask_head"]
+        max_norm: 1.0
+        norm_type: 2
+  options:
+    lr:
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.CompositeParamScheduler
+          schedulers:
+            - _target_: fvcore.common.param_scheduler.LinearParamScheduler
+              start_value: 1e-8
+              end_value: ${optim.optimizer.lr}
+            - _target_: fvcore.common.param_scheduler.CosineParamScheduler
+              start_value: ${optim.optimizer.lr}
+              end_value: 1e-8
+          lengths: [0.05, 0.95]
+          interval_scaling: ['rescaled', 'rescaled']
+    weight_decay:
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.ConstantParamScheduler
+          value: 0.05
+
+
+max_epochs: 200
+
+model:
+  _target_: vggt.models.vggt.VGGT
+  enable_camera: True
+  enable_depth: False
+  enable_point: False
+  enable_track: False
+  enable_smpl: False
+  enable_smpl_multi_query: False
+  enable_smpl_multi_query_trans: False
+  enable_smpl_multi_query_trans_rot: True
+  # Number of person query slots (SMPL tokens). Must be >= the max people per
+  # scene (see data.*.max_num_people). Fewer slots -> much less memory in the
+  # dense-landmark head (cost scales with smpl_num_people * 512 queries).
+  # checkpoint_step_10000.pt was trained with 20 person query slots (person_queries
+  # is (1,20,1024) in the ckpt). MUST be 20 or load_state_dict shape-mismatches.
+  smpl_num_people: 20
+  # That checkpoint predates the dense-landmark / person-mask heads (no such weights
+  # in the ckpt). Keep them OFF: with 20 people the dense-landmark head also OOMs.
+  enable_smpl_dense_landmark: False   # direct per-view 512 2D landmarks + logvar
+  enable_person_mask: False           # per-person per-view patch-grid mask
+
+distributed:
+  # check https://docs.pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html for options
+  backend: nccl
+  comms_dtype: None
+  find_unused_parameters: True
+  timeout_mins: 30
+  gradient_as_bucket_view: True  # Less memory used
+  bucket_cap_mb: 25
+  broadcast_buffers: True
+
+cuda:
+    cudnn_deterministic: False
+    cudnn_benchmark: False
+    allow_tf32: True
