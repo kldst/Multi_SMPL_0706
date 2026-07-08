@@ -25,13 +25,13 @@ num_workers: 0            # real run: parallelise the (slow) pyd reads
 seed_value: 42
 accum_steps: 1            # raise for a larger effective batch (grad accumulation)
 patch_size: 14
-val_epoch_freq: 1
-max_img_per_gpu: 4        # 4 views/sample -> batch_size = floor(4/4) = 1 sample/step
+val_epoch_freq: 5
+max_img_per_gpu: 40        # 4 views/sample -> batch_size = floor(4/4) = 1 sample/step
 
 # Full epoch = one pass over all samples (~50,648 steps on 1 GPU, /world_size on N).
 # Set to an int to cap steps/epoch (as the overfit config did with 1000).
 limit_train_batches: null
-limit_val_batches: 50
+limit_val_batches: 10
 
 
 data:
@@ -59,8 +59,8 @@ data:
       dataset_configs:
         - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
           split: train
-          SysSMPL_DIR: /mnt/train-data-4-hdd/yian/SMPL_multi_dataset/mamma
-          SysSMPL_ANNOTATION_DIR: /mnt/train-data-4-hdd/yian/SMPL_multi_dataset/mamma
+          SysSMPL_DIR: /dataset/mamma
+          SysSMPL_ANNOTATION_DIR: /dataset/mamma
           max_num_people: 6   # dataset smpl query 數量
           min_num_images: 4
           emit_landmarks: True
@@ -90,8 +90,8 @@ data:
       dataset_configs:
         - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
           split: test
-          SysSMPL_DIR: /mnt/train-data-4-hdd/yian/SMPL_multi_dataset/mamma
-          SysSMPL_ANNOTATION_DIR: /mnt/train-data-4-hdd/yian/SMPL_multi_dataset/mamma
+          SysSMPL_DIR: /dataset/mamma
+          SysSMPL_ANNOTATION_DIR: /dataset/mamma
           max_num_people: 6
           min_num_images: 4
           emit_landmarks: True
@@ -173,14 +173,15 @@ logging:
 checkpoint:
   save_dir: logs/${exp_name}/ckpts
   save_freq: 1              # epochs (a full epoch is huge; step_freq is the real knob)
-  save_step_freq: 2000      # checkpoint every 2000 optimizer steps
-  resume_checkpoint_path: "/mnt/train-data-4-hdd/yian/vggt_multi_0621_mamma_demo_eval_bundle/ckpt/model.pt"
+  save_step_freq: 5000      # checkpoint every 2000 optimizer steps
+  resume_checkpoint_path: "/dataset/vggt/model.pt"
   strict: False
   load_aggregator_only: False
 
 
 loss:
   _target_: loss.MultitaskLoss
+  smplx_model_dir: /dataset/smplx_models
   camera:
     weight: 5.0
     loss_type: "l1"
@@ -227,7 +228,7 @@ loss:
     # use_gt: True 會把 pred pose/beta/trans/mesh_translate 全換成 GT(sanity 模式,
     # joints3d/vertices/mesh_translate/joints2d 都會變 ~0)。正式訓練用 False。
     use_gt: False   # 驗證 gt data loss 有沒有問題而已
-    joints2d_use_gt_camera: False
+    joints2d_use_gt_camera: True
     normalize_cam: True
     use_mamma: True
     use_hungarian: True
