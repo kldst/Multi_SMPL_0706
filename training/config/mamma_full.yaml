@@ -63,7 +63,7 @@ data:
           split: train
           SysSMPL_DIR: /dataset/mamma
           SysSMPL_ANNOTATION_DIR: /dataset/mamma
-          max_num_people: 6   # dataset smpl query 數量
+          max_num_people: 2   # dataset smpl query 數量
           min_num_images: 4
           emit_landmarks: True
           emit_person_mask: True
@@ -94,7 +94,7 @@ data:
           split: test
           SysSMPL_DIR: /dataset/mamma
           SysSMPL_ANNOTATION_DIR: /dataset/mamma
-          max_num_people: 6
+          max_num_people: 2
           min_num_images: 4
           emit_landmarks: True
           emit_person_mask: True
@@ -293,7 +293,7 @@ optim:
           value: 0.0
 
 
-max_epochs: 50   # ~50k steps/epoch on 1 GPU; stop early via checkpoints as needed
+max_epochs: 500   # ~50k steps/epoch on 1 GPU; stop early via checkpoints as needed
 
 model:
   _target_: vggt.models.vggt.VGGT
