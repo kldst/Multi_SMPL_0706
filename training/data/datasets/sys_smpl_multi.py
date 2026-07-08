@@ -273,6 +273,7 @@ class SysSMPLMultiDataset(BaseDataset):
             return {}
 
         data_store: Dict[str, List[Dict[str, np.ndarray]]] = {}
+        bad_pyds: List[str] = []
         total_seqs = len(seq_dirs)
         logging.info(
             "SysSMPLMulti: building index over %d sequences (serial, reads 1 pyd per frame/view)...",
@@ -287,7 +288,11 @@ class SysSMPLMultiDataset(BaseDataset):
                 if len(views) < self.min_num_images:
                     continue
 
-                first_people = self._load_pickle(seq_dir / views[0] / f"{frame}.data.pyd")
+                try:
+                    first_people = self._load_pickle(seq_dir / views[0] / f"{frame}.data.pyd")
+                except Exception:  # corrupt/unreadable pyd -> skip this frame
+                    bad_pyds.append(str(seq_dir / views[0] / f"{frame}.data.pyd"))
+                    continue
                 if not isinstance(first_people, dict) or not first_people:
                     continue
                 person_ids = sorted(first_people.keys(), key=lambda item: int(item))
@@ -310,7 +315,11 @@ class SysSMPLMultiDataset(BaseDataset):
                     image_path = self._raw_image_path(seq_dir, view_name, frame)
                     if image_path is None or not data_path.is_file():
                         continue
-                    frame_people = self._load_pickle(data_path)
+                    try:
+                        frame_people = self._load_pickle(data_path)
+                    except Exception:  # corrupt/unreadable pyd -> skip this view
+                        bad_pyds.append(str(data_path))
+                        continue
                     if not isinstance(frame_people, dict) or not frame_people:
                         continue
                     cam_person = next(iter(frame_people.values()))
@@ -355,6 +364,12 @@ class SysSMPLMultiDataset(BaseDataset):
                     seq_i, total_seqs, len(data_store),
                 )
 
+        if bad_pyds:
+            logging.warning(
+                "SysSMPLMulti: skipped %d unreadable/corrupt pyd file(s) during build (e.g. %s)",
+                len(bad_pyds), ", ".join(bad_pyds[:5]),
+            )
+
         return data_store
 
     def _parse_gender_label(self, g_raw) -> int:
@@ -384,6 +399,61 @@ class SysSMPLMultiDataset(BaseDataset):
 
         return 2
 
+    def _load_view(self, anno, emit_mask):
+        """Load a view's RGB image (+ instance mask when needed).
+
+        Returns ``(image, mask)`` or ``(None, None)`` when the view is UNUSABLE:
+        the image is corrupt/unreadable, OR (when ``emit_mask``) a mask file is
+        present but corrupt. A legitimately absent mask (``mask_path`` is None) is
+        fine and yields ``mask=None``. Lets the caller swap in another view instead
+        of crashing on scattered bad-block corruption in the dataset.
+        """
+        image = read_image_cv2(anno["image_path"])
+        if image is None:
+            return None, None
+        mask = None
+        if emit_mask and anno.get("mask_path"):
+            mask = cv2.imread(anno["mask_path"], cv2.IMREAD_GRAYSCALE)
+            if mask is None:  # mask present but unreadable -> reject this view
+                return None, None
+        return image, mask
+
+    def _select_good_views(self, metadata, order, n_target, emit_mask):
+        """Pick ``n_target`` views (in ``order``) whose image+mask load OK.
+
+        Caches the decoded image/mask so the caller does not re-read them. Returns
+        ``(ids, annos, images, masks)`` or ``None`` if fewer than ``n_target`` usable
+        views exist (signals the caller to resample a different sample). ``order``
+        must cover every view index so corrupt ones can be replaced by others.
+        """
+        chosen, annos, imgs, masks = [], [], [], []
+        for vi in order:
+            if len(annos) >= n_target:
+                break
+            img, msk = self._load_view(metadata[int(vi)], emit_mask)
+            if img is None:
+                self._bad_view_reads = getattr(self, "_bad_view_reads", 0) + 1
+                n = self._bad_view_reads
+                if n in (1, 10, 100) or n % 500 == 0:
+                    logging.warning(
+                        "SysSMPLMulti: skipped %d corrupt image/mask view(s) so far "
+                        "(e.g. %s); swapping in another view.",
+                        n, metadata[int(vi)]["image_path"],
+                    )
+                continue
+            chosen.append(int(vi)); annos.append(metadata[int(vi)]); imgs.append(img); masks.append(msk)
+
+        if len(annos) < n_target:
+            if self.allow_duplicate_img and annos:
+                good = list(zip(chosen, annos, imgs, masks))
+                k = 0
+                while len(annos) < n_target:
+                    c, a, i, m = good[k % len(good)]; k += 1
+                    chosen.append(c); annos.append(a); imgs.append(i); masks.append(m)
+            else:
+                return None
+        return chosen, annos, imgs, masks
+
     def get_data(
         self,
         seq_index: Optional[int] = None,
@@ -391,6 +461,7 @@ class SysSMPLMultiDataset(BaseDataset):
         seq_name: Optional[str] = None,
         ids: Optional[List[int]] = None,
         aspect_ratio: float = 1.0,
+        _resample_depth: int = 0,
     ) -> dict:
         if self.inside_random:
             seq_index = random.randint(0, self.sequence_list_len - 1)
@@ -399,24 +470,48 @@ class SysSMPLMultiDataset(BaseDataset):
             seq_name = self.sequence_list[seq_index]
 
         metadata = self.data_store[seq_name]
+        n_views = len(metadata)
 
+        # Build the full ordered list of view indices to TRY (corrupt ones get
+        # skipped and replaced by later entries), plus the target view count.
         if ids is None:
             if self.fixed_view_sampling:
-                total_views = len(metadata)
-                requested = img_per_seq or total_views
-                if requested > total_views:
+                requested = img_per_seq or n_views
+                if requested > n_views:
                     logging.warning(
                         "Requested %d views but only %d available in %s; clamping to available views.",
-                        requested,
-                        total_views,
-                        seq_name,
+                        requested, n_views, seq_name,
                     )
-                    requested = total_views
-                ids = list(range(requested))
+                    requested = n_views
+                n_target = requested
+                view_order = list(range(n_views))                     # deterministic
             else:
-                ids = np.random.choice(len(metadata), img_per_seq, replace=self.allow_duplicate_img)
+                n_target = int(img_per_seq)
+                view_order = list(np.random.permutation(n_views))     # random, full cover
+        else:
+            n_target = len(ids)
+            seen = {int(i) for i in ids}
+            view_order = [int(i) for i in ids] + [i for i in range(n_views) if i not in seen]
 
-        annos = [metadata[i] for i in ids]
+        emit_mask_sel = bool(self.emit_person_mask and metadata[0].get("raw_mamma", False))
+        sel = self._select_good_views(metadata, view_order, n_target, emit_mask_sel)
+        if sel is None:
+            # Not enough readable views in this frame -> resample a different sample.
+            if _resample_depth < 20 and self.sequence_list_len > 1:
+                logging.warning(
+                    "SysSMPLMulti: %s has < %d readable views; resampling another sample.",
+                    seq_name, n_target,
+                )
+                new_idx = random.randint(0, self.sequence_list_len - 1)
+                return self.get_data(
+                    seq_index=new_idx, img_per_seq=img_per_seq,
+                    aspect_ratio=aspect_ratio, _resample_depth=_resample_depth + 1,
+                )
+            raise RuntimeError(
+                f"SysSMPLMulti: could not gather {n_target} readable views for {seq_name} "
+                f"after {_resample_depth} resamples (dataset too corrupt?)."
+            )
+        ids, annos, view_images, view_masks = sel
         target_image_shape = self.get_target_shape(aspect_ratio)
 
         images = []
@@ -465,9 +560,9 @@ class SysSMPLMultiDataset(BaseDataset):
             has_smpl[person_idx] = 1.0
             person_keys.append(person.get("person_key", f"person_{person_idx}"))
 
-        for anno in annos:
+        for view_i, anno in enumerate(annos):
             image_path = anno["image_path"]
-            image = read_image_cv2(image_path)
+            image = view_images[view_i]   # pre-loaded & validated in _select_good_views
             depth_map = np.zeros(image.shape[:2], dtype=np.float32)
 
             extri_opencv = np.copy(anno["extrinsics"])
@@ -554,7 +649,7 @@ class SysSMPLMultiDataset(BaseDataset):
             # the image via extra_maps (nearest interp preserves labels). ---
             extra_maps = None
             if emit_mask and anno.get("mask_path"):
-                instance_mask = cv2.imread(anno["mask_path"], cv2.IMREAD_GRAYSCALE)
+                instance_mask = view_masks[view_i]   # pre-loaded & validated (not None here)
                 if instance_mask is not None:
                     extra_maps = {"person_mask": instance_mask.astype(np.float32)}
 
