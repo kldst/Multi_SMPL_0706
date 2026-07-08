@@ -69,8 +69,8 @@ data:
           contact_threshold: 0.01
           contact_missing_as_negative: True # 沒接觸的點會學習
           # smoke-test caps (null = full data). See debug_max_* at top of file.
-          max_sequences: ${debug_max_sequences}
-          max_frames_per_sequence: ${debug_max_frames_per_sequence}
+          max_sequences: null
+          max_frames_per_sequence: null
   val:
     _target_: data.dynamic_dataloader.DynamicTorchDataset
     num_workers: ${num_workers}
@@ -100,8 +100,8 @@ data:
           contact_threshold: 0.01
           contact_missing_as_negative: True
           # val caps (independent debug switch at top of file).
-          max_sequences: ${debug_val_max_sequences}
-          max_frames_per_sequence: ${debug_val_max_frames_per_sequence}
+          max_sequences: null
+          max_frames_per_sequence: null
 
 
 logging:
