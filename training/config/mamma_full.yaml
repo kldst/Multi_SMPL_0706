@@ -13,15 +13,21 @@ exp_name: mamma_full
 #*   debug_max_frames_per_sequence: 2
 #*   limit_train_batches: 20        # (below) also cap steps/epoch
 #* REAL run: set the two train knobs back to null and limit_train_batches: null.
-#* TRAIN caps (null = full data):
-# debug_max_sequences: 3
-# debug_max_frames_per_sequence: 2
-# debug_val_max_sequences: 30
-# debug_val_max_frames_per_sequence: 5
+#* TRAIN caps (null = full data). These MUST stay defined (uncommented) because
+#* the dataset configs below reference them via ${debug_*}. For a FAST smoke test
+#* set them to small ints (e.g. 3 / 2 / 30 / 5) + limit_train_batches: 20.
+debug_max_sequences: null
+debug_max_frames_per_sequence: null
+debug_val_max_sequences: null
+debug_val_max_frames_per_sequence: null
 # ----------------------------------------------------------------------------
 
 img_size: 518
-num_workers: 0            # real run: parallelise the (slow) pyd reads
+num_workers: 8            # real run: parallelise the (slow) pyd reads during training
+# Parallelism for the ONE-TIME dataset index build (reads 1 pyd per (frame,view)).
+# null = auto (min(cpu,8)). The built index is cached to disk so later runs skip
+# the build entirely (dir: $MAMMA_INDEX_CACHE_DIR or ~/.cache/vggt_mamma_index).
+build_workers: null
 seed_value: 42
 accum_steps: 1            # raise for a larger effective batch (grad accumulation)
 patch_size: 14
@@ -68,9 +74,11 @@ data:
           emit_contact: True
           contact_threshold: 0.01
           contact_missing_as_negative: True # 沒接觸的點會學習
-          # smoke-test caps (null = full data). See debug_max_* at top of file.
-          max_sequences: null
-          max_frames_per_sequence: null
+          # smoke-test caps (null = full data). Toggle via debug_max_* at top of file.
+          max_sequences: ${debug_max_sequences}
+          max_frames_per_sequence: ${debug_max_frames_per_sequence}
+          # index-build parallelism (null = auto). Built index is cached to disk.
+          build_workers: ${build_workers}
   val:
     _target_: data.dynamic_dataloader.DynamicTorchDataset
     num_workers: ${num_workers}
@@ -100,8 +108,9 @@ data:
           contact_threshold: 0.01
           contact_missing_as_negative: True
           # val caps (independent debug switch at top of file).
-          max_sequences: null
-          max_frames_per_sequence: null
+          max_sequences: ${debug_val_max_sequences}
+          max_frames_per_sequence: ${debug_val_max_frames_per_sequence}
+          build_workers: ${build_workers}
 
 
 logging:

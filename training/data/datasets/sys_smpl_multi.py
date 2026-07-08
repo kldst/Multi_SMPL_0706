@@ -1,7 +1,10 @@
+import hashlib
 import logging
+import multiprocessing as mp
 import os
 import pickle
 import random
+from functools import partial
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -58,6 +61,9 @@ class SysSMPLMultiDataset(BaseDataset):
         landmark_visibility_threshold: float = 0.5,
         max_sequences: Optional[int] = None,
         max_frames_per_sequence: Optional[int] = None,
+        build_workers: Optional[int] = None,
+        use_index_cache: bool = True,
+        index_cache_dir: Optional[str] = None,
     ):
         super().__init__(common_conf=common_conf)
         # Optional caps to bound the (raw Mamma) build, which cold-reads one pyd
@@ -65,6 +71,16 @@ class SysSMPLMultiDataset(BaseDataset):
         # sequences) for fast debug / quick-iteration startup on a cold disk.
         self.max_sequences = max_sequences
         self.max_frames_per_sequence = max_frames_per_sequence
+        # The build reads one pyd per (frame,view) just to extract small metadata.
+        # On the full dataset that is ~160k serial cold reads (many minutes/hours).
+        # build_workers   -> parallelise those reads across processes (None = auto).
+        # use_index_cache -> pickle the resulting (small) index and reuse it on the
+        #                    next run with the same config (rebuild is then skipped).
+        # index_cache_dir -> where to store it (None = $MAMMA_INDEX_CACHE_DIR or
+        #                    ~/.cache/vggt_mamma_index).
+        self.build_workers = build_workers
+        self.use_index_cache = bool(use_index_cache)
+        self.index_cache_dir = index_cache_dir
 
         self.debug = common_conf.debug
         self.training = common_conf.training
@@ -257,6 +273,128 @@ class SysSMPLMultiDataset(BaseDataset):
         logging.info("SysSMPLMulti raw Mamma sequences/frames: %d", len(raw_store))
         return raw_store
 
+    # Bump this when _process_one_seq's stored schema / logic changes, so stale
+    # on-disk index caches are ignored instead of loaded.
+    _INDEX_CACHE_VERSION = "v1"
+
+    @staticmethod
+    def _process_one_seq(
+        seq_dir: Path,
+        data_root: Path,
+        min_num_images: int,
+        max_frames_per_sequence: Optional[int],
+    ) -> Dict[str, List[Dict[str, np.ndarray]]]:
+        """Build the metadata entries for a SINGLE sequence dir.
+
+        Reads one pyd per (frame, view) but keeps only small metadata
+        (pose/beta/trans + per-view camera + paths). Extracted as a pure
+        staticmethod (uses only static helpers + its args) so it can run in a
+        multiprocessing worker; returns the partial data_store for this seq.
+        """
+        cls = SysSMPLMultiDataset
+        local_store: Dict[str, List[Dict[str, np.ndarray]]] = {}
+        grouped = cls._group_raw_mamma_frames(seq_dir)
+        frame_items = sorted(grouped.items())
+        if max_frames_per_sequence is not None:
+            frame_items = frame_items[: int(max_frames_per_sequence)]
+        for frame, views in frame_items:
+            if len(views) < min_num_images:
+                continue
+
+            first_people = cls._load_pickle(seq_dir / views[0] / f"{frame}.data.pyd")
+            if not isinstance(first_people, dict) or not first_people:
+                continue
+            person_ids = sorted(first_people.keys(), key=lambda item: int(item))
+            people_params = {}
+            for person_id in person_ids:
+                person = first_people[person_id]
+                people_params[person_id] = {
+                    "person_key": f"person_{int(person_id):02d}",
+                    "smpl_pose": np.asarray(person["pose_world"], dtype=np.float32).reshape(-1)[:72],
+                    "smpl_beta": np.asarray(person["shape"], dtype=np.float32).reshape(-1)[:10],
+                    "smpl_trans": np.asarray(person["trans_world"], dtype=np.float32).reshape(-1)[:3],
+                    "gender": person.get("gender", "neutral"),
+                    # instance-mask value for this person == person_idx + 1.
+                    "person_idx": int(person.get("person_idx", int(person_id))),
+                }
+
+            view_annos = []
+            for view_name in views:
+                data_path = seq_dir / view_name / f"{frame}.data.pyd"
+                image_path = cls._raw_image_path(seq_dir, view_name, frame)
+                if image_path is None or not data_path.is_file():
+                    continue
+                frame_people = cls._load_pickle(data_path)
+                if not isinstance(frame_people, dict) or not frame_people:
+                    continue
+                cam_person = next(iter(frame_people.values()))
+                camera = cls._parse_camera(cam_person["cam_int"], cam_person["cam_ext"])
+                if camera is None:
+                    continue
+
+                people_annos = [
+                    dict(people_params[person_id])
+                    for person_id in person_ids
+                    if person_id in people_params and person_id in frame_people
+                ]
+                if not people_annos:
+                    continue
+
+                mask_path = data_path.with_name(f"{frame}.mask.jpg")
+                view_annos.append(
+                    {
+                        "image_path": str(image_path),
+                        "intrinsics": camera["intrinsics"],
+                        "extrinsics": camera["extrinsics"],
+                        "people": people_annos,
+                        "num_people": len(people_annos),
+                        "raw_mamma": True,
+                        # for on-the-fly landmark / mask GT (loaded lazily in get_data)
+                        "data_path": str(data_path),
+                        "mask_path": str(mask_path) if mask_path.is_file() else None,
+                    }
+                )
+
+            if len(view_annos) >= min_num_images and len({a["num_people"] for a in view_annos}) == 1:
+                rel = seq_dir.name
+                try:
+                    rel = str(seq_dir.relative_to(data_root))
+                except ValueError:
+                    pass
+                local_store[f"raw_mamma_{rel}_frame_{frame}"] = view_annos
+
+        return local_store
+
+    def _index_cache_path(self, seq_dirs: List[Path]) -> Path:
+        """Path of the on-disk index cache for this exact build config.
+
+        Keyed by the concrete sequence set (which already reflects the roots that
+        exist + max_sequences) plus min_num_images / max_frames_per_sequence, so
+        any change rebuilds automatically. Not keyed on file mtimes (would need to
+        stat ~160k files); bump _INDEX_CACHE_VERSION or delete the cache dir if the
+        underlying pyd contents change in place.
+        """
+        key_parts = [
+            self._INDEX_CACHE_VERSION,
+            str(self.image_root),
+            str(self.data_root),
+            str(self.min_num_images),
+            str(self.max_frames_per_sequence),
+            *[str(p) for p in seq_dirs],
+        ]
+        digest = hashlib.sha1("\n".join(key_parts).encode("utf-8")).hexdigest()[:16]
+
+        if self.index_cache_dir is not None:
+            cache_dir = Path(self.index_cache_dir).expanduser()
+        else:
+            cache_dir = Path(
+                os.environ.get(
+                    "MAMMA_INDEX_CACHE_DIR",
+                    os.path.expanduser("~/.cache/vggt_mamma_index"),
+                )
+            )
+        return cache_dir / f"mamma_index_{digest}.pkl"
+
     def _build_raw_mamma_sequences(self) -> Dict[str, List[Dict[str, np.ndarray]]]:
         roots = [self.data_root]
         if self.image_root != self.data_root:
@@ -272,77 +410,71 @@ class SysSMPLMultiDataset(BaseDataset):
         if not seq_dirs:
             return {}
 
+        # 1) Fast path: reuse a previously-built index for this exact config.
+        cache_path = self._index_cache_path(seq_dirs) if self.use_index_cache else None
+        if cache_path is not None and cache_path.is_file():
+            try:
+                with open(cache_path, "rb") as f:
+                    data_store = pickle.load(f)
+                logging.info(
+                    "SysSMPLMulti: loaded cached index (%d frames) from %s",
+                    len(data_store), cache_path,
+                )
+                return data_store
+            except Exception as e:  # corrupt / stale cache -> rebuild
+                logging.warning(
+                    "SysSMPLMulti: failed to load index cache %s (%s); rebuilding",
+                    cache_path, e,
+                )
+
+        # 2) Build the index, parallelising the per-sequence pyd reads across cores.
+        n_workers = self.build_workers
+        if n_workers is None:
+            n_workers = min((os.cpu_count() or 4), 8)
+        n_workers = max(1, min(int(n_workers), len(seq_dirs)))
+        logging.info(
+            "SysSMPLMulti: building index over %d sequences with %d worker(s)...",
+            len(seq_dirs), n_workers,
+        )
+
         data_store: Dict[str, List[Dict[str, np.ndarray]]] = {}
-        for seq_dir in seq_dirs:
-            grouped = self._group_raw_mamma_frames(seq_dir)
-            frame_items = sorted(grouped.items())
-            if self.max_frames_per_sequence is not None:
-                frame_items = frame_items[: int(self.max_frames_per_sequence)]
-            for frame, views in frame_items:
-                if len(views) < self.min_num_images:
-                    continue
-
-                first_people = self._load_pickle(seq_dir / views[0] / f"{frame}.data.pyd")
-                if not isinstance(first_people, dict) or not first_people:
-                    continue
-                person_ids = sorted(first_people.keys(), key=lambda item: int(item))
-                people_params = {}
-                for person_id in person_ids:
-                    person = first_people[person_id]
-                    people_params[person_id] = {
-                        "person_key": f"person_{int(person_id):02d}",
-                        "smpl_pose": np.asarray(person["pose_world"], dtype=np.float32).reshape(-1)[:72],
-                        "smpl_beta": np.asarray(person["shape"], dtype=np.float32).reshape(-1)[:10],
-                        "smpl_trans": np.asarray(person["trans_world"], dtype=np.float32).reshape(-1)[:3],
-                        "gender": person.get("gender", "neutral"),
-                        # instance-mask value for this person == person_idx + 1.
-                        "person_idx": int(person.get("person_idx", int(person_id))),
-                    }
-
-                view_annos = []
-                for view_name in views:
-                    data_path = seq_dir / view_name / f"{frame}.data.pyd"
-                    image_path = self._raw_image_path(seq_dir, view_name, frame)
-                    if image_path is None or not data_path.is_file():
-                        continue
-                    frame_people = self._load_pickle(data_path)
-                    if not isinstance(frame_people, dict) or not frame_people:
-                        continue
-                    cam_person = next(iter(frame_people.values()))
-                    camera = self._parse_camera(cam_person["cam_int"], cam_person["cam_ext"])
-                    if camera is None:
-                        continue
-
-                    people_annos = [
-                        dict(people_params[person_id])
-                        for person_id in person_ids
-                        if person_id in people_params and person_id in frame_people
-                    ]
-                    if not people_annos:
-                        continue
-
-                    mask_path = data_path.with_name(f"{frame}.mask.jpg")
-                    view_annos.append(
-                        {
-                            "image_path": str(image_path),
-                            "intrinsics": camera["intrinsics"],
-                            "extrinsics": camera["extrinsics"],
-                            "people": people_annos,
-                            "num_people": len(people_annos),
-                            "raw_mamma": True,
-                            # for on-the-fly landmark / mask GT (loaded lazily in get_data)
-                            "data_path": str(data_path),
-                            "mask_path": str(mask_path) if mask_path.is_file() else None,
-                        }
+        total = len(seq_dirs)
+        if n_workers == 1:
+            for i, seq_dir in enumerate(seq_dirs, 1):
+                data_store.update(
+                    self._process_one_seq(
+                        seq_dir, self.data_root, self.min_num_images, self.max_frames_per_sequence
                     )
+                )
+                if i % 50 == 0 or i == total:
+                    logging.info("SysSMPLMulti: built %d/%d sequences", i, total)
+        else:
+            worker = partial(
+                self._process_one_seq,
+                data_root=self.data_root,
+                min_num_images=self.min_num_images,
+                max_frames_per_sequence=self.max_frames_per_sequence,
+            )
+            ctx = mp.get_context("fork")
+            done = 0
+            with ctx.Pool(n_workers) as pool:
+                for local_store in pool.imap_unordered(worker, seq_dirs, chunksize=1):
+                    data_store.update(local_store)
+                    done += 1
+                    if done % 50 == 0 or done == total:
+                        logging.info("SysSMPLMulti: built %d/%d sequences", done, total)
 
-                if len(view_annos) >= self.min_num_images and len({a["num_people"] for a in view_annos}) == 1:
-                    rel = seq_dir.name
-                    try:
-                        rel = str(seq_dir.relative_to(self.data_root))
-                    except ValueError:
-                        pass
-                    data_store[f"raw_mamma_{rel}_frame_{frame}"] = view_annos
+        # 3) Persist for next time (best-effort; a cache failure is never fatal).
+        if cache_path is not None:
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = cache_path.with_suffix(".pkl.tmp")
+                with open(tmp_path, "wb") as f:
+                    pickle.dump(data_store, f, protocol=pickle.HIGHEST_PROTOCOL)
+                os.replace(tmp_path, cache_path)
+                logging.info("SysSMPLMulti: wrote index cache -> %s", cache_path)
+            except Exception as e:
+                logging.warning("SysSMPLMulti: failed to write index cache %s (%s)", cache_path, e)
 
         return data_store
 
