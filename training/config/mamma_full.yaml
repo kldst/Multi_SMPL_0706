@@ -28,7 +28,7 @@ seed_value: 42
 accum_steps: 1            # raise for a larger effective batch (grad accumulation)
 patch_size: 14
 val_epoch_freq: 5
-max_img_per_gpu: 4        # 4 views/sample -> batch_size = floor(4/4) = 1 sample/step
+max_img_per_gpu: 40        # 4 views/sample -> batch_size = floor(4/4) = 1 sample/step
 
 # Full epoch = one pass over all samples (~50,648 steps on 1 GPU, /world_size on N).
 # Set to an int to cap steps/epoch (as the overfit config did with 1000).
