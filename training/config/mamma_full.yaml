@@ -250,7 +250,7 @@ optim:
 
   optimizer:
     _target_: torch.optim.AdamW
-    lr: 1e-4
+    lr: 2e-4
     weight_decay: 0.0        # real run: consider a small wd (e.g. 0.01)
 
   # Aggregator stays frozen (only the heads train), matching the overfit setup.
@@ -279,17 +279,11 @@ optim:
         norm_type: 2
   options:
     lr:
+      # No warmup: cosine decay from peak lr straight to 1e-8 over all steps.
       - scheduler:
-          _target_: fvcore.common.param_scheduler.CompositeParamScheduler
-          schedulers:
-            - _target_: fvcore.common.param_scheduler.LinearParamScheduler
-              start_value: 1e-8
-              end_value: ${optim.optimizer.lr}
-            - _target_: fvcore.common.param_scheduler.CosineParamScheduler
-              start_value: ${optim.optimizer.lr}
-              end_value: 1e-8
-          lengths: [0.05, 0.95]
-          interval_scaling: ['rescaled', 'rescaled']
+          _target_: fvcore.common.param_scheduler.CosineParamScheduler
+          start_value: ${optim.optimizer.lr}
+          end_value: 1e-8
     weight_decay:
       - scheduler:
           _target_: fvcore.common.param_scheduler.ConstantParamScheduler
