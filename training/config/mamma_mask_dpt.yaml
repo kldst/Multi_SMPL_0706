@@ -100,7 +100,7 @@ data:
 
 logging:
   log_dir: logs/${exp_name}
-  use_wandb: False
+  use_wandb: True
   log_visuals: False
   log_freq: 1
   log_level_primary: INFO
@@ -165,6 +165,7 @@ checkpoint:
   resume_checkpoint_path: "/dataset/checkpoint_step_10000.pt"
   strict: False
   load_aggregator_only: False
+  load_model_only: True  
   # Warm-start the mask head's DPT trunk from pretrained depth-head weights
   # (depth boundaries ~= body boundaries -> much faster convergence).
   # The SMPL resume checkpoint above has NO depth head, so point this at the
