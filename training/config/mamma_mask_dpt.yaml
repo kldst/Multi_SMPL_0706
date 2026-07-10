@@ -13,8 +13,8 @@ defaults:
 #* landmark head back on top later.
 exp_name: mamma_mask_dpt
 
-debug_max_sequences: 50
-debug_max_frames_per_sequence: 50
+debug_max_sequences: null
+debug_max_frames_per_sequence: null
 debug_val_max_sequences: null
 debug_val_max_frames_per_sequence: null
 # ----------------------------------------------------------------------------
