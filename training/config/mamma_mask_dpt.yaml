@@ -261,9 +261,21 @@ optim:
   options:
     lr:
       - scheduler:
-          _target_: fvcore.common.param_scheduler.CosineParamScheduler
-          start_value: ${optim.optimizer.lr}
-          end_value: 1e-8
+          # Linear warm-up over the first 5% of training (1e-8 -> peak lr), then
+          # cosine decay (peak lr -> 1e-8) over the remaining 95%. Same shape as
+          # 0621_mamma.yaml. Warm-up matters more here because the mask head +
+          # camera/smpl heads start from a fresh optimizer (load_model_only) and
+          # the DPT trunk is only warm-started, so a cold high lr can spike grads.
+          _target_: fvcore.common.param_scheduler.CompositeParamScheduler
+          schedulers:
+            - _target_: fvcore.common.param_scheduler.LinearParamScheduler
+              start_value: 1e-8
+              end_value: ${optim.optimizer.lr}
+            - _target_: fvcore.common.param_scheduler.CosineParamScheduler
+              start_value: ${optim.optimizer.lr}
+              end_value: 1e-8
+          lengths: [0.02, 0.98]
+          interval_scaling: ['rescaled', 'rescaled']
     weight_decay:
       - scheduler:
           _target_: fvcore.common.param_scheduler.ConstantParamScheduler
