@@ -249,6 +249,46 @@ class Trainer:
                     f"Filtered checkpoint to {len(model_state_dict)} aggregator parameters (load_aggregator_only=True)."
                 )
 
+        # Optional warm start for the pixel-level (DPT) person-mask head: copy a
+        # pretrained depth head's DPT trunk (depth_head.*) into
+        # person_mask_head.trunk.* when the model itself has no such weights yet.
+        # The depth trunk already encodes body/depth boundaries, which speeds up
+        # mask convergence a lot vs. training the trunk from scratch.
+        #   True  -> take depth_head.* from THIS resume checkpoint;
+        #   <str> -> load depth_head.* from that checkpoint path instead (use when
+        #            resuming from an SMPL-only checkpoint that has no depth head,
+        #            e.g. base VGGT ckpt/model.pt keeps the depth weights).
+        mask_trunk_src = getattr(self.checkpoint_conf, "init_mask_trunk_from_depth", False)
+        if mask_trunk_src:
+            if isinstance(mask_trunk_src, str):
+                with g_pathmgr.open(mask_trunk_src, "rb") as f:
+                    depth_ckpt = torch.load(f, map_location="cpu")
+                depth_state = depth_ckpt["model"] if "model" in depth_ckpt else depth_ckpt
+            else:
+                depth_state = model_state_dict
+            own_state = self.model.state_dict()
+            n_copied = 0
+            for key, value in depth_state.items():
+                if not key.startswith("depth_head."):
+                    continue
+                target_key = "person_mask_head.trunk." + key[len("depth_head."):]
+                if target_key in own_state and target_key not in model_state_dict:
+                    if own_state[target_key].shape == value.shape:
+                        model_state_dict[target_key] = value.clone()
+                        n_copied += 1
+            if self.rank == 0:
+                src_name = mask_trunk_src if isinstance(mask_trunk_src, str) else "resume checkpoint"
+                logging.info(
+                    f"init_mask_trunk_from_depth: copied {n_copied} depth_head.* tensors "
+                    f"from {src_name} into person_mask_head.trunk.*"
+                )
+                if n_copied == 0:
+                    logging.warning(
+                        "init_mask_trunk_from_depth found no copyable depth_head.* weights -- "
+                        "the source checkpoint has no depth head (or shapes mismatch). "
+                        "Point it at a checkpoint that has one (e.g. the base VGGT model.pt)."
+                    )
+
         strict_flag = self.checkpoint_conf.strict and not load_aggregator_only
         missing, unexpected = self.model.load_state_dict(
             model_state_dict, strict=strict_flag

@@ -168,6 +168,8 @@ def compute_smpl_loss(
     hungarian_cost_trans_weight: float = 0.0,
     hungarian_cost_mesh_trans_weight: float = 0.0,
     hungarian_cost_presence_weight: float = 0.0,
+    hungarian_cost_mask_weight: float = 0.0,
+    hungarian_mask_cost_grid: int = 32,
     use_mamma: bool = False,
     **kwargs,
 ):
@@ -190,6 +192,7 @@ def compute_smpl_loss(
     # the existing single-person loss path can supervise every person jointly.
     matching_cost_metrics = {
         "presence_cost": predictions["smpl_pose"].new_zeros(()),
+        "mask_cost": predictions["smpl_pose"].new_zeros(()),
     }
     if "mesh_translate" in predictions and "mesh_translate" not in batch:
         batch = dict(batch)
@@ -233,6 +236,8 @@ def compute_smpl_loss(
                 cost_trans_weight=hungarian_cost_trans_weight,
                 cost_mesh_trans_weight=hungarian_cost_mesh_trans_weight,
                 cost_presence_weight=hungarian_cost_presence_weight,
+                cost_mask_weight=hungarian_cost_mask_weight,
+                mask_cost_grid=hungarian_mask_cost_grid,
                 return_cost_metrics=True,
                 use_mamma=use_mamma,
             )
@@ -1011,6 +1016,9 @@ def compute_smpl_loss(
         "landmark_px": landmark_px.detach(),
         "loss_mask": loss_mask,
         "mask_soft_iou": mask_soft_iou,
+        # matched-pair Hungarian cost diagnostics (0 when the cost term is off).
+        "hungarian_presence_cost": matching_cost_metrics["presence_cost"],
+        "hungarian_mask_cost": matching_cost_metrics["mask_cost"],
         "smpl_presence_positive_prob_mean": smpl_presence_positive_prob_mean,
         "smpl_presence_empty_prob_mean": smpl_presence_empty_prob_mean,
         "smpl_joints2d_max_abs": smpl_joints2d_max_abs,

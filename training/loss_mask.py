@@ -23,9 +23,19 @@ def compute_mask_loss(
     gt_mask = gt_mask.to(device=pred_logits.device, dtype=pred_logits.dtype).clamp(0.0, 1.0)
 
     if pred_logits.shape != gt_mask.shape:
-        raise ValueError(
-            f"person mask shape mismatch: pred {tuple(pred_logits.shape)} vs gt {tuple(gt_mask.shape)}"
-        )
+        # Tolerate a spatial-resolution mismatch (e.g. DPT head at 259x259 vs GT
+        # emitted at another grid): bilinearly resample the logits to the GT grid.
+        if pred_logits.shape[:2] == gt_mask.shape[:2] and pred_logits.dim() == 4:
+            pred_logits = F.interpolate(
+                pred_logits,
+                size=gt_mask.shape[-2:],
+                mode="bilinear",
+                align_corners=False,
+            )
+        else:
+            raise ValueError(
+                f"person mask shape mismatch: pred {tuple(pred_logits.shape)} vs gt {tuple(gt_mask.shape)}"
+            )
 
     # per-element BCE, then reduce over the spatial + view dims.
     bce = F.binary_cross_entropy_with_logits(pred_logits, gt_mask, reduction="none")

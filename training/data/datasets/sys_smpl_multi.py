@@ -46,6 +46,11 @@ class SysSMPLMultiDataset(BaseDataset):
         len_train: Optional[int] = None,
         emit_landmarks: bool = False,
         emit_person_mask: bool = False,
+        # Resolution of the emitted person_mask GT: mask grid = processed image
+        # size // person_mask_stride.  None keeps the legacy patch-grid behaviour
+        # (stride = patch_size -> 37x37 for 518/14).  Set 2 to supervise a
+        # pixel-level mask head (259x259), matching model.person_mask_down_ratio.
+        person_mask_stride: Optional[int] = None,
         emit_contact: bool = False,
         contact_threshold: float = 0.01,
         # When sdf_vertices is absent for a frame, how to label person-person contact:
@@ -94,6 +99,9 @@ class SysSMPLMultiDataset(BaseDataset):
         # vertex_visibility / *.mask.jpg) via the ``verts_512`` matrix.
         self.emit_landmarks = bool(emit_landmarks)
         self.emit_person_mask = bool(emit_person_mask)
+        self.person_mask_stride = (
+            int(person_mask_stride) if person_mask_stride is not None else None
+        )
         # MAMMA-style per-landmark contact GT (person-person via sdf_vertices + floor
         # via floor_contact_mask). Needs the verts_512 matrix, so it also loads it.
         self.emit_contact = bool(emit_contact)
@@ -399,60 +407,72 @@ class SysSMPLMultiDataset(BaseDataset):
 
         return 2
 
-    def _load_view(self, anno, emit_mask):
-        """Load a view's RGB image (+ instance mask when needed).
+    def _load_view(self, anno, emit_mask, emit_pyd):
+        """Load a view's RGB image (+ instance mask / GT pyd when needed).
 
-        Returns ``(image, mask)`` or ``(None, None)`` when the view is UNUSABLE:
-        the image is corrupt/unreadable, OR (when ``emit_mask``) a mask file is
-        present but corrupt. A legitimately absent mask (``mask_path`` is None) is
-        fine and yields ``mask=None``. Lets the caller swap in another view instead
-        of crashing on scattered bad-block corruption in the dataset.
+        Returns ``(image, mask, pyd)`` or ``(None, None, None)`` when the view is
+        UNUSABLE: the image is corrupt/unreadable, OR (when ``emit_mask``) a present
+        mask file is corrupt, OR (when ``emit_pyd``) the landmark/contact ``.data.pyd``
+        is corrupt/unreadable. A legitimately absent mask (``mask_path`` is None) is
+        fine and yields ``mask=None``. Validating the pyd HERE (and caching it) means
+        the per-view landmark/contact read in get_data cannot crash: a bad pyd makes
+        the caller swap in another view instead. Lets the loader ride out scattered
+        bad-block corruption in the dataset (images, masks, AND pyds).
         """
         image = read_image_cv2(anno["image_path"])
         if image is None:
-            return None, None
+            return None, None, None
         mask = None
         if emit_mask and anno.get("mask_path"):
             mask = cv2.imread(anno["mask_path"], cv2.IMREAD_GRAYSCALE)
             if mask is None:  # mask present but unreadable -> reject this view
-                return None, None
-        return image, mask
+                return None, None, None
+        pyd = None
+        if emit_pyd:
+            try:
+                pyd = self._load_pickle(anno["data_path"])
+            except Exception:  # corrupt/unreadable GT pyd -> reject this view
+                return None, None, None
+            if not isinstance(pyd, dict) or not pyd:
+                return None, None, None
+        return image, mask, pyd
 
-    def _select_good_views(self, metadata, order, n_target, emit_mask):
-        """Pick ``n_target`` views (in ``order``) whose image+mask load OK.
+    def _select_good_views(self, metadata, order, n_target, emit_mask, emit_pyd):
+        """Pick ``n_target`` views (in ``order``) whose image+mask+pyd load OK.
 
-        Caches the decoded image/mask so the caller does not re-read them. Returns
-        ``(ids, annos, images, masks)`` or ``None`` if fewer than ``n_target`` usable
-        views exist (signals the caller to resample a different sample). ``order``
-        must cover every view index so corrupt ones can be replaced by others.
+        Caches the decoded image/mask/pyd so the caller does not re-read them. Returns
+        ``(ids, annos, images, masks, pyds)`` or ``None`` if fewer than ``n_target``
+        usable views exist (signals the caller to resample a different sample).
+        ``order`` must cover every view index so corrupt ones can be replaced.
         """
-        chosen, annos, imgs, masks = [], [], [], []
+        chosen, annos, imgs, masks, pyds = [], [], [], [], []
         for vi in order:
             if len(annos) >= n_target:
                 break
-            img, msk = self._load_view(metadata[int(vi)], emit_mask)
+            img, msk, pyd = self._load_view(metadata[int(vi)], emit_mask, emit_pyd)
             if img is None:
                 self._bad_view_reads = getattr(self, "_bad_view_reads", 0) + 1
                 n = self._bad_view_reads
                 if n in (1, 10, 100) or n % 500 == 0:
                     logging.warning(
-                        "SysSMPLMulti: skipped %d corrupt image/mask view(s) so far "
+                        "SysSMPLMulti: skipped %d corrupt image/mask/pyd view(s) so far "
                         "(e.g. %s); swapping in another view.",
                         n, metadata[int(vi)]["image_path"],
                     )
                 continue
-            chosen.append(int(vi)); annos.append(metadata[int(vi)]); imgs.append(img); masks.append(msk)
+            chosen.append(int(vi)); annos.append(metadata[int(vi)])
+            imgs.append(img); masks.append(msk); pyds.append(pyd)
 
         if len(annos) < n_target:
             if self.allow_duplicate_img and annos:
-                good = list(zip(chosen, annos, imgs, masks))
+                good = list(zip(chosen, annos, imgs, masks, pyds))
                 k = 0
                 while len(annos) < n_target:
-                    c, a, i, m = good[k % len(good)]; k += 1
-                    chosen.append(c); annos.append(a); imgs.append(i); masks.append(m)
+                    c, a, i, m, p = good[k % len(good)]; k += 1
+                    chosen.append(c); annos.append(a); imgs.append(i); masks.append(m); pyds.append(p)
             else:
                 return None
-        return chosen, annos, imgs, masks
+        return chosen, annos, imgs, masks, pyds
 
     def get_data(
         self,
@@ -493,8 +513,13 @@ class SysSMPLMultiDataset(BaseDataset):
             seen = {int(i) for i in ids}
             view_order = [int(i) for i in ids] + [i for i in range(n_views) if i not in seen]
 
-        emit_mask_sel = bool(self.emit_person_mask and metadata[0].get("raw_mamma", False))
-        sel = self._select_good_views(metadata, view_order, n_target, emit_mask_sel)
+        _is_raw_sel = bool(metadata[0].get("raw_mamma", False))
+        emit_mask_sel = bool(self.emit_person_mask and _is_raw_sel)
+        # pyd is (re-)read for landmark/contact GT in the loop below; validate+cache
+        # it here so a corrupt pyd swaps the view instead of crashing mid-loop.
+        emit_pyd_sel = bool((self.emit_landmarks or self.emit_contact)
+                            and self._verts512 is not None and _is_raw_sel)
+        sel = self._select_good_views(metadata, view_order, n_target, emit_mask_sel, emit_pyd_sel)
         if sel is None:
             # Not enough readable views in this frame -> resample a different sample.
             if _resample_depth < 20 and self.sequence_list_len > 1:
@@ -511,7 +536,7 @@ class SysSMPLMultiDataset(BaseDataset):
                 f"SysSMPLMulti: could not gather {n_target} readable views for {seq_name} "
                 f"after {_resample_depth} resamples (dataset too corrupt?)."
             )
-        ids, annos, view_images, view_masks = sel
+        ids, annos, view_images, view_masks, view_pyds = sel
         target_image_shape = self.get_target_shape(aspect_ratio)
 
         images = []
@@ -598,7 +623,7 @@ class SysSMPLMultiDataset(BaseDataset):
             contact_gt = None
             floor_contact_gt = None
             if emit_lmk or emit_ct:
-                view_pyd = self._load_pickle(anno["data_path"])
+                view_pyd = view_pyds[view_i]   # pre-loaded & validated in _select_good_views
                 pyd_ids = sorted(view_pyd.keys(), key=lambda x: int(x))
             if emit_lmk:
                 landmarks2d_orig = np.zeros((padded_people, 512, 2), dtype=np.float32)
@@ -708,21 +733,25 @@ class SysSMPLMultiDataset(BaseDataset):
                 floor_contact_list.append(floor_contact_gt.astype(np.float32))
 
             if emit_mask:
-                # Match the model's ACTUAL patch grid, which follows the processed
-                # image size (the dynamic sampler may use a non-square aspect ratio,
-                # so it is NOT always img_size//patch_size). vggt.py builds the mask
-                # head output as (H_final//patch, W_final//patch).
-                patch_h_final = H_final // self.patch_size
-                patch_w_final = W_final // self.patch_size
+                # Match the model's ACTUAL mask-head grid, which follows the
+                # processed image size (the dynamic sampler may use a non-square
+                # aspect ratio, so it is NOT always img_size//stride).
+                #   stride = patch_size (legacy, default) -> the dot-product head's
+                #     patch grid (37x37 for 518/14);
+                #   stride = person_mask_stride (e.g. 2)  -> the DPT head's
+                #     pixel-level grid (259x259 for 518).
+                mask_stride = self.person_mask_stride or self.patch_size
+                mask_h_final = H_final // mask_stride
+                mask_w_final = W_final // mask_stride
                 person_mask = np.zeros(
-                    (padded_people, patch_h_final, patch_w_final), dtype=np.float32
+                    (padded_people, mask_h_final, mask_w_final), dtype=np.float32
                 )
                 if extra_maps is not None and extra_maps.get("person_mask") is not None:
                     mask_final = extra_maps["person_mask"]
                     for person_idx in range(person_count):
                         pv = int(people[person_idx].get("person_idx", person_idx)) + 1
                         person_mask[person_idx] = rasterize_person_patch_mask(
-                            mask_final, pv, patch_h_final, patch_w_final
+                            mask_final, pv, mask_h_final, mask_w_final
                         )
                 person_mask_list.append(person_mask)
 

@@ -1,0 +1,309 @@
+defaults:
+  - default_dataset_smpl.yaml
+
+# export CUDA_VISIBLE_DEVICES=2
+# export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# export PYTHONPATH=/mnt/train-data-4-hdd/yian/vggt_multi_0621_mamma_demo_eval_bundle:/mnt/train-data-4-hdd/yian/vggt_multi_0621_mamma_demo_eval_bundle/training
+# torchrun --standalone --nproc_per_node=1 launch.py --config mamma_mask_dpt
+
+#* Ablation vs mamma_full: LANDMARK HEAD OFF. Only SMPL + pixel-level (DPT)
+#* person-mask head, and the Hungarian matching now includes a 2D mask cost
+#* (hungarian_cost_mask_weight) so slot<->person assignment stays stable when
+#* people are in contact. If the mask alone fixes the identity mixing, add the
+#* landmark head back on top later.
+exp_name: mamma_mask_dpt
+
+debug_max_sequences: null
+debug_max_frames_per_sequence: null
+debug_val_max_sequences: null
+debug_val_max_frames_per_sequence: null
+# ----------------------------------------------------------------------------
+
+img_size: 518
+num_workers: 0
+seed_value: 42
+accum_steps: 1            # consider 4-8: Hungarian matching is noisy at batch=1
+patch_size: 14
+val_epoch_freq: 5
+enable_val: False
+max_img_per_gpu: 50       # 4 views/sample -> batch_size = floor(4/4) = 1 sample/step
+
+limit_train_batches: null
+limit_val_batches: 10
+
+
+data:
+  train:
+    _target_: data.dynamic_dataloader.DynamicTorchDataset
+    num_workers: ${num_workers}
+    max_img_per_gpu: ${max_img_per_gpu}
+    common_config:
+      img_size: ${img_size}
+      patch_size: ${patch_size}
+      training: True
+      img_nums: [4, 4]
+      fixed_view_sampling: False
+      inside_random: False
+      rescale_aug: False
+      augs:
+        aspects: [1.0, 1.0]
+        scales: null
+    dataset:
+      _target_: data.composed_dataset.ComposedDataset
+      dataset_configs:
+        - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
+          split: train
+          SysSMPL_DIR: /dataset/mamma
+          SysSMPL_ANNOTATION_DIR: /dataset/mamma
+          max_num_people: 6
+          min_num_images: 4
+          # landmark/contact OFF for this ablation; mask ON at pixel level.
+          emit_landmarks: False
+          emit_contact: False
+          emit_person_mask: True
+          # GT mask grid = 518 // stride, must match model.person_mask_down_ratio.
+          # stride 1 = full pixel res; GT stays binary (no INTER_AREA soft
+          # boundary), so loss_mask floor ~= 0 and soft_iou ceiling ~= 1.
+          person_mask_stride: 1
+          max_sequences: ${debug_max_sequences}
+          max_frames_per_sequence: ${debug_max_frames_per_sequence}
+  val:
+    _target_: data.dynamic_dataloader.DynamicTorchDataset
+    num_workers: ${num_workers}
+    max_img_per_gpu: ${max_img_per_gpu}
+    common_config:
+      img_size: ${img_size}
+      patch_size: ${patch_size}
+      training: False
+      img_nums: [4, 4]
+      fixed_view_sampling: True
+      inside_random: False
+      augs:
+        aspects: [1.0, 1.0]
+        scales: null
+    dataset:
+      _target_: data.composed_dataset.ComposedDataset
+      dataset_configs:
+        - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
+          split: test
+          SysSMPL_DIR: /dataset/mamma
+          SysSMPL_ANNOTATION_DIR: /dataset/mamma
+          max_num_people: 6
+          min_num_images: 4
+          emit_landmarks: False
+          emit_contact: False
+          emit_person_mask: True
+          person_mask_stride: 1
+          max_sequences: ${debug_val_max_sequences}
+          max_frames_per_sequence: ${debug_val_max_frames_per_sequence}
+
+
+logging:
+  log_dir: logs/${exp_name}
+  use_wandb: False
+  log_visuals: False
+  log_freq: 1
+  log_level_primary: INFO
+  log_level_secondary: WARNING
+  all_ranks: False
+  tensorboard_writer:
+    _target_: train_utils.tb_writer.TensorBoardLogger
+    path: ${logging.log_dir}/tensorboard
+  wandb_writer:
+    _target_: train_utils.wandb_logger.WandbLogger
+    path: ${logging.log_dir}/wandb
+    project: vggt_multi
+    entity: null
+    name: ${exp_name}
+    mode: online
+    resume: null
+  scalar_keys_to_log:
+    train:
+      keys_to_log:
+        - loss_objective
+        - loss_camera
+        - loss_T
+        - loss_R
+        - loss_FL
+        - loss_smpl
+        - loss_smpl_losses
+        - loss_mesh_translate
+        - loss_smpl_presence
+        - loss_smpl_joints2d
+        - loss_smpl_joints3d
+        - loss_smpl_vertices
+        - loss_mask
+        - mask_soft_iou
+        - hungarian_mask_cost
+        - hungarian_presence_cost
+        - smpl_presence_positive_prob_mean
+    val:
+      keys_to_log:
+        - loss_objective
+        - loss_camera
+        - loss_T
+        - loss_R
+        - loss_FL
+        - loss_smpl
+        - loss_smpl_losses
+        - loss_mesh_translate
+        - loss_smpl_presence
+        - loss_smpl_joints2d
+        - loss_smpl_joints3d
+        - loss_smpl_vertices
+        - loss_mask
+        - mask_soft_iou
+        - hungarian_mask_cost
+        - hungarian_presence_cost
+        - smpl_presence_positive_prob_mean
+
+
+checkpoint:
+  save_dir: logs/${exp_name}/ckpts
+  save_freq: 1
+  save_step_freq: 5000
+  resume_checkpoint_path: "/dataset/checkpoint_step_10000.pt"
+  strict: False
+  load_aggregator_only: False
+  # Warm-start the mask head's DPT trunk from pretrained depth-head weights
+  # (depth boundaries ~= body boundaries -> much faster convergence).
+  # The SMPL resume checkpoint above has NO depth head, so point this at the
+  # base VGGT checkpoint (a path loads depth_head.* from there; True would look
+  # in the resume checkpoint itself).
+  init_mask_trunk_from_depth: /dataset/vggt/model.pt
+
+
+loss:
+  _target_: loss.MultitaskLoss
+  # local path (this box has no /dataset mount; matches the dataset paths above)
+  smplx_model_dir: /dataset/smplx_models
+  camera:
+    weight: 5.0
+    loss_type: "l1"
+  depth: null
+  smpl:
+    weight: 1.0
+    loss_type: l1
+    loss_type_joints2d: l1
+    loss_type_joints3d: l1
+
+    weight_pose: 1.0
+    weight_beta: 0.001
+    init_w: 1.0
+    weight_joints2d: 5.0
+    weight_joints3d: 5.0
+    weight_vertices: 1.5
+    weight_trans: 0.0
+    weight_mesh_translate: 1.0
+    weight_presence: 0.5
+    presence_loss_type: focal
+    presence_focal_alpha: null
+    presence_focal_gamma: 2.0
+
+    # landmark head disabled in this ablation.
+    weight_landmark: 0.0
+    weight_landmark_vis: 0.0
+    weight_contact: 0.0
+    weight_floor_contact: 0.0
+
+    weight_mask: 1.0
+
+    use_gt: False
+    joints2d_use_gt_camera: True
+    normalize_cam: True
+    use_mamma: True
+    use_hungarian: True
+    hungarian_cost_pose_weight: 1.0
+    hungarian_cost_beta_weight: 0.1
+    hungarian_cost_trans_weight: 0.0
+    hungarian_cost_mesh_trans_weight: 0.3
+    hungarian_cost_presence_weight: 0.05
+    #* NEW: 2D mask evidence in the matching cost. This is what pins the
+    #* slot<->person assignment when two people are in contact (pose/mesh_trans
+    #* costs become near-identical there, but image masks stay distinct).
+    #* Pred + GT masks are pooled to hungarian_mask_cost_grid^2 before the
+    #* per-pair soft BCE, so the cost is resolution-independent and cheap.
+    hungarian_cost_mask_weight: 1.0
+    hungarian_mask_cost_grid: 32
+  track: null
+
+
+optim:
+  param_group_modifiers: False
+
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 1e-4
+    weight_decay: 0.0
+
+  frozen_module_names:
+      - "*aggregator*"
+
+  amp:
+    enabled: True
+    amp_dtype: bfloat16
+  gradient_clip:
+    _target_: train_utils.gradient_clip.GradientClipper
+    configs:
+      - module_name: ["aggregator"]
+        max_norm: 1.0
+        norm_type: 2
+      - module_name: ["camera"]
+        max_norm: 1.0
+        norm_type: 2
+      - module_name: ["smpl"]
+        max_norm: 1.0
+        norm_type: 2
+      - module_name: ["person_mask_head"]
+        max_norm: 1.0
+        norm_type: 2
+  options:
+    lr:
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.CosineParamScheduler
+          start_value: ${optim.optimizer.lr}
+          end_value: 1e-8
+    weight_decay:
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.ConstantParamScheduler
+          value: 0.0
+
+
+max_epochs: 300
+
+model:
+  _target_: vggt.models.vggt.VGGT
+  enable_camera: True
+  enable_depth: False
+  enable_point: False
+  enable_track: False
+  enable_smpl: False
+  enable_smpl_multi_query: False
+  enable_smpl_multi_query_trans: False
+  enable_smpl_multi_query_trans_rot: True
+  smpl_num_people: 20
+  # landmark head OFF; pixel-level DPT mask head ON.
+  enable_smpl_dense_landmark: False
+  enable_person_mask: True
+  person_mask_head_type: dpt
+  # Full-res logits (518x518; matches person_mask_stride: 1). Measured fwd+bwd
+  # peak 9.6GB on a 16GB 4070TiS (8.0GB at down_ratio 2) -- the DPT fusion runs
+  # at <=148x148 either way; down_ratio only moves the final upsample.
+  person_mask_down_ratio: 1
+  person_mask_embed_dim: 128
+  landmark_use_mask_embedding: False
+  landmark_predict_contact: False
+
+distributed:
+  backend: nccl
+  comms_dtype: None
+  find_unused_parameters: True
+  timeout_mins: 30
+  gradient_as_bucket_view: True
+  bucket_cap_mb: 25
+  broadcast_buffers: True
+
+cuda:
+    cudnn_deterministic: False
+    cudnn_benchmark: False
+    allow_tf32: True

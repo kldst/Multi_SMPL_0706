@@ -19,7 +19,7 @@ from vggt.heads.smpl_multi_query_head import SMPLMultiQueryHead
 from vggt.heads.smpl_multi_query_trans_head import SMPLMultiQueryTransHead
 from vggt.heads.smpl_multi_query_trans_rot_head import SMPLMultiQueryTransRotHead
 from vggt.heads.smpl_dense_landmark_head import DenseLandmarkHeadConfig, SMPLDenseLandmarkHead
-from vggt.heads.person_mask_head import PersonMaskHead
+from vggt.heads.person_mask_head import PersonMaskDPTHead, PersonMaskHead
 
 
 class VGGT(nn.Module, PyTorchModelHubMixin):
@@ -29,6 +29,8 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
                  enable_smpl_multi_query=False, enable_smpl_multi_query_trans=False,
                  enable_smpl_multi_query_trans_rot=False, smpl_num_people=1,
                  enable_smpl_dense_landmark=False, enable_person_mask=False,
+                 person_mask_head_type="dot", person_mask_down_ratio=2,
+                 person_mask_embed_dim=None,
                  landmark_use_mask_embedding=False, landmark_mask_embed_dim=256,
                  landmark_detach_mask_context=True, landmark_predict_contact=False,
                  ):
@@ -55,7 +57,30 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
             if enable_smpl_dense_landmark
             else None
         )
-        self.person_mask_head = PersonMaskHead(query_dim=embed_dim, context_dim=2 * embed_dim) if enable_person_mask else None
+        # "dot": patch-grid dot-product head (37x37). "dpt": pixel-level DPT head
+        # (H/person_mask_down_ratio, e.g. 259x259 for 518) -- sharper boundaries
+        # for people in contact.
+        self.person_mask_head_type = str(person_mask_head_type)
+        if enable_person_mask:
+            if self.person_mask_head_type == "dpt":
+                self.person_mask_head = PersonMaskDPTHead(
+                    dim_in=2 * embed_dim,
+                    query_dim=embed_dim,
+                    embed_dim=int(person_mask_embed_dim or 128),
+                    intermediate_layer_idx=intermediate_layer_idx,
+                    down_ratio=int(person_mask_down_ratio),
+                    patch_size=patch_size,
+                )
+            elif self.person_mask_head_type == "dot":
+                self.person_mask_head = PersonMaskHead(
+                    query_dim=embed_dim,
+                    context_dim=2 * embed_dim,
+                    embed_dim=int(person_mask_embed_dim or 256),
+                )
+            else:
+                raise ValueError(f"Unknown person_mask_head_type: {person_mask_head_type!r}")
+        else:
+            self.person_mask_head = None
 
     def forward(
         self,
@@ -249,9 +274,18 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
                 patch_w = images.shape[-1] // self.aggregator.patch_size
 
                 if self.person_mask_head is not None:
-                    predictions["person_mask_logits"] = self.person_mask_head(
-                        person_tokens, patch_tokens, patch_hw=(patch_h, patch_w)
-                    )
+                    if self.person_mask_head_type == "dpt":
+                        # pixel-level (B, S, P, H/dr, W/dr) from the DPT trunk.
+                        predictions["person_mask_logits"] = self.person_mask_head(
+                            person_tokens,
+                            aggregated_tokens_list,
+                            images=images,
+                            patch_start_idx=patch_start_idx,
+                        )
+                    else:
+                        predictions["person_mask_logits"] = self.person_mask_head(
+                            person_tokens, patch_tokens, patch_hw=(patch_h, patch_w)
+                        )
                 if self.smpl_dense_landmark_head is not None:
                     # Direct per-view 2D: queries attend each view's own patches.
                     # When enabled, the per-person mask logits are embedded as a

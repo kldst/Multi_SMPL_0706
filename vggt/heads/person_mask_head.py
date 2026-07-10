@@ -22,10 +22,12 @@ compares them to the down-sampled instance mask.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional
 
 import torch
 import torch.nn as nn
+
+from vggt.heads.dpt_head import DPTHead
 
 
 class PersonMaskHead(nn.Module):
@@ -77,4 +79,90 @@ class PersonMaskHead(nn.Module):
         return logits                                        # (B,S,P,N) or (B,S,P,H,W)
 
 
-__all__ = ["PersonMaskHead"]
+class PersonMaskDPTHead(nn.Module):
+    """Pixel-level per-person mask head (Mask2Former-style dot product on a DPT
+    per-pixel embedding map).
+
+    The 37x37 patch-grid ``PersonMaskHead`` is too coarse to separate two people
+    in contact -- a contact boundary spans only a couple of patches.  This head
+    runs a DPT trunk ONCE over the aggregator's multi-layer tokens to produce a
+    dense per-pixel embedding map at ``H/down_ratio`` resolution, then dots it
+    with a projection of each person token:
+
+        logits[b, s, p, y, x] = <W_q person_token[b, p], pixel_embed[b, s, :, y, x]>
+
+    so P people cost one trunk pass + P cheap dot products (NOT P DPT passes).
+    Supervised by the pixel-level instance mask (``*.mask.jpg``) area-pooled to
+    the same resolution.
+
+    Args:
+        dim_in: aggregator token channel dim (2*embed_dim).
+        query_dim: person-token channel dim (SMPL head query dim).
+        embed_dim: shared dot-product embedding dim.
+        features: DPT trunk fusion channels.
+        out_channels: DPT per-layer projection channels.
+        intermediate_layer_idx: aggregator layers feeding the trunk (same
+            convention as the depth/point heads).
+        down_ratio: output stride vs. the input image (2 -> 259x259 for 518).
+    """
+
+    def __init__(
+        self,
+        *,
+        dim_in: int = 2048,
+        query_dim: int = 1024,
+        embed_dim: int = 128,
+        features: int = 256,
+        out_channels: Optional[List[int]] = None,
+        intermediate_layer_idx: Optional[List[int]] = None,
+        down_ratio: int = 2,
+        patch_size: int = 14,
+    ):
+        super().__init__()
+        self.embed_dim = int(embed_dim)
+        self.down_ratio = int(down_ratio)
+        # feature_only=True: the trunk returns the fused per-pixel feature map
+        # (B, S, features, H/down_ratio, W/down_ratio) without an activation head.
+        # Defaults mirror the depth head so its pretrained trunk weights can be
+        # copied in for a warm start (see trainer's mask-head init option).
+        self.trunk = DPTHead(
+            dim_in=dim_in,
+            patch_size=patch_size,
+            features=features,
+            out_channels=out_channels or [256, 512, 1024, 1024],
+            intermediate_layer_idx=intermediate_layer_idx or [4, 11, 17, 23],
+            feature_only=True,
+            down_ratio=self.down_ratio,
+        )
+        self.pixel_proj = nn.Conv2d(features, self.embed_dim, kernel_size=1)
+        self.q_proj = nn.Sequential(
+            nn.LayerNorm(query_dim),
+            nn.Linear(query_dim, self.embed_dim),
+        )
+        # Learnable temperature (log-scale) on the dot product.
+        self.log_scale = nn.Parameter(torch.zeros(()))
+
+    def forward(
+        self,
+        person_tokens: torch.Tensor,               # (B, P, C_q)
+        aggregated_tokens_list: List[torch.Tensor],
+        images: torch.Tensor,                      # (B, S, 3, H, W)
+        patch_start_idx: int,
+    ) -> torch.Tensor:
+        B, P, _ = person_tokens.shape
+        S = images.shape[1]
+
+        feat = self.trunk(
+            aggregated_tokens_list, images=images, patch_start_idx=patch_start_idx
+        )                                                        # (B, S, F, H', W')
+        Hm, Wm = feat.shape[-2:]
+        pix = self.pixel_proj(feat.reshape(B * S, *feat.shape[2:]))
+        pix = pix.reshape(B, S, self.embed_dim, Hm, Wm)
+
+        q = self.q_proj(person_tokens)                           # (B, P, D)
+        logits = torch.einsum("bpd,bsdhw->bsphw", q, pix.to(q.dtype))
+        logits = logits * (self.embed_dim ** -0.5) * self.log_scale.exp()
+        return logits                                            # (B, S, P, H', W')
+
+
+__all__ = ["PersonMaskHead", "PersonMaskDPTHead"]

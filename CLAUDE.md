@@ -9,6 +9,9 @@ tokens; config default now **5**, was 20). Two optional auxiliary heads
 (`enable_smpl_dense_landmark` / `enable_person_mask`) reuse those person tokens — see
 "Dense-landmark + per-person-mask heads" below.
 
+> **2026-07 mask 改版**：pixel-level DPT mask head + Hungarian mask cost 的完整
+> 動機/實作/實測紀錄在 **`CLAUDE_MASK_DPT.md`**（config `mamma_mask_dpt.yaml`）。
+
 ## Known bugs & gotchas
 
 ### 1. GT camera lookup: image stem vs. archive view-id mismatch (FIXED)
@@ -89,6 +92,16 @@ identity with NO extra matching. They plug into the existing Hungarian +
 - `vggt/heads/person_mask_head.py` — `PersonMaskHead`. Dot-product of a projected
   person token with each view's patch tokens → `person_mask_logits (B,S,P,H,W)`
   at patch resolution (37×37 for 518/14). Cheap (~0.8M params).
+- `vggt/heads/person_mask_head.py` — **`PersonMaskDPTHead`** (added later): pixel-level
+  mask head. A DPT trunk (feature_only) runs ONCE over the aggregator's 4 intermediate
+  layers → per-pixel embedding map at `H/person_mask_down_ratio` (259×259 for 518, ratio 2);
+  person tokens project to the same dim and dot-product against it (Mask2Former-style)
+  → `person_mask_logits (B,S,P,259,259)`. ~33M params, full model fwd+bwd peak ≈8GB
+  (4 views, frozen aggregator). Select via `model.person_mask_head_type: dpt` +
+  `person_mask_down_ratio` / `person_mask_embed_dim`; `"dot"` keeps the old head.
+  Warm start: `checkpoint.init_mask_trunk_from_depth: True` copies the pretrained
+  `depth_head.*` DPT trunk from model.pt into `person_mask_head.trunk.*` (56 tensors;
+  the feature_only `output_conv1` differs in shape and is skipped).
 - Enabled via config `model.enable_smpl_dense_landmark` / `enable_person_mask`.
   `smpl_num_people` (config knob) sets the query-slot count; keep it `>=` the
   dataset's `max_num_people` (config sets both to 5). Measured memory (frozen
@@ -107,7 +120,12 @@ so landmark 2D = `M @ vertices2d`, visibility = `M @ vertex_visibility`; the
 per-person mask is `*.mask.jpg` (pixel value == `person_idx+1`, occlusion-aware)
 down-sampled to the patch grid. `SysSMPLMultiDataset` (raw path) emits
 `smpl_landmarks2d (S,P,512,2)` (normalised), `smpl_landmarks2d_visibility (S,P,512)`,
-`person_mask (S,P,pg,pg)` when `emit_landmarks` / `emit_person_mask` are set. The
+`person_mask (S,P,pg,pg)` when `emit_landmarks` / `emit_person_mask` are set.
+The mask GT grid is `H_final // person_mask_stride` (dataset knob): `None` keeps the
+legacy patch grid (stride=patch_size → 37×37); `2` emits the pixel-level 259×259 GT
+for the DPT mask head (must match `model.person_mask_down_ratio`; `compute_mask_loss`
+bilinearly resamples the logits if they disagree). Config `mamma_mask_dpt.yaml` is the
+landmark-OFF / DPT-mask-ON / mask-cost-matching ablation of `mamma_full.yaml`. The
 mask rides through `process_one_image`'s `extra_maps` (nearest interp) so it gets
 the identical crop/resize as the image; landmarks ride the `track` argument.
 `base_dataset.process_one_image` gained an optional `extra_maps=None` param
@@ -124,7 +142,15 @@ To train on the raw data, point the config's `SysSMPL_DIR` /
   gender helpers, axis-angle↔rotmat, gauge/normalise/project, `compute_gt_mesh_*`.
   Leaf module (torch/numpy only).
 - `smpl_matching.py` — `apply_hungarian_matching` (+ `_binary_cross_entropy_prob`).
-  Imports `compute_gt_mesh_translate` from `smpl_body`.
+  Imports `compute_gt_mesh_translate` from `smpl_body`. The cost matrix is
+  vectorized (no per-pair Python loop) and built under `no_grad`. Besides
+  pose/beta/trans/mesh_trans/presence it supports a **2D mask cost**
+  (`hungarian_cost_mask_weight` in `loss.smpl`): pred `person_mask_logits` and GT
+  `person_mask` are adaptive-avg-pooled to `hungarian_mask_cost_grid`² (default 32,
+  resolution-independent) and compared per (pred,GT) pair with soft BCE via two
+  matmuls. This pins slot↔person assignment when people are in contact (pose /
+  mesh_translate costs tie there, image masks don't). Matched-pair diagnostics
+  `hungarian_mask_cost` / `hungarian_presence_cost` are returned in the loss dict.
 - `loss_smpl.py` — the loss functions: `compute_smpl_loss` (~790 lines, the bulk),
   `smpl_losses_plus_from_axis_angle`, `binary_focal_loss_with_logits`,
   `compute_smpl_3d_joint_loss`, **`compute_landmark_loss`** (direct-2D GNLL, gated
