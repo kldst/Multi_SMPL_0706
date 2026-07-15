@@ -20,6 +20,7 @@ from vggt.heads.smpl_multi_query_trans_head import SMPLMultiQueryTransHead
 from vggt.heads.smpl_multi_query_trans_rot_head import SMPLMultiQueryTransRotHead
 from vggt.heads.smpl_dense_landmark_head import DenseLandmarkHeadConfig, SMPLDenseLandmarkHead
 from vggt.heads.person_mask_head import PersonMaskDPTHead, PersonMaskHead
+from vggt.heads.smpl_direct_mask_head import SMPLDirectMaskCamHead, SMPLDirectMaskHead
 
 
 class VGGT(nn.Module, PyTorchModelHubMixin):
@@ -76,6 +77,23 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
                     query_dim=embed_dim,
                     context_dim=2 * embed_dim,
                     embed_dim=int(person_mask_embed_dim or 256),
+                )
+            elif self.person_mask_head_type == "direct":
+                # Ablation: decode the mask straight from the person token, with no
+                # image features. View-agnostic by construction (see the head's
+                # docstring); output is full-res (img_size) logits.
+                self.person_mask_head = SMPLDirectMaskHead(
+                    query_dim=embed_dim,
+                    out_size=int(img_size),
+                )
+            elif self.person_mask_head_type == "direct_cam":
+                # Ablation: token decoder + per-view camera-token conditioning, so
+                # the mask can differ per view via geometry (still no image patch
+                # features). Output is full-res (img_size) logits.
+                self.person_mask_head = SMPLDirectMaskCamHead(
+                    query_dim=embed_dim,
+                    cam_dim=2 * embed_dim,
+                    out_size=int(img_size),
                 )
             else:
                 raise ValueError(f"Unknown person_mask_head_type: {person_mask_head_type!r}")
@@ -281,6 +299,19 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
                             aggregated_tokens_list,
                             images=images,
                             patch_start_idx=patch_start_idx,
+                        )
+                    elif self.person_mask_head_type == "direct":
+                        # full-res (B, S, P, H, W) decoded straight from the token.
+                        predictions["person_mask_logits"] = self.person_mask_head(
+                            person_tokens, images=images
+                        )
+                    elif self.person_mask_head_type == "direct_cam":
+                        # token + per-view camera token (idx 0 of the last block,
+                        # (B, S, C)) -> per-view (B, S, P, H, W). Same camera token
+                        # the camera head / return_camera_tokens use.
+                        cam_tokens = aggregated_tokens_list[-1][:, :, 0]
+                        predictions["person_mask_logits"] = self.person_mask_head(
+                            person_tokens, cam_tokens=cam_tokens
                         )
                     else:
                         predictions["person_mask_logits"] = self.person_mask_head(

@@ -190,27 +190,48 @@ def run(scene, num_views, max_people):
     gt_pose = np.asarray(batch["smpl_pose"]); gt_beta = np.asarray(batch["smpl_beta"])
     gt_trans = np.asarray(batch["smpl_trans"]); gt_gender = np.asarray(batch["smpl_gender"])
 
+    # The landmark head is optional (mamma_mask_dpt turns it OFF). Guard every
+    # landmark-specific path so this demo also works for a mask-only checkpoint.
+    HAS_LMK = getattr(MODEL, "smpl_dense_landmark_head", None) is not None
     decoder_tf = MODEL.smpl_multi_query_trans_rot_head.decoder.transformer.transformer
-    landmark_tf = MODEL.smpl_dense_landmark_head.transformer.transformer
     with torch.autocast("cuda", dtype=torch.bfloat16):
         with CrossAttnCapture(decoder_tf) as smpl_cap:
-            with CrossAttnCapture(landmark_tf) as lmk_cap:
+            if HAS_LMK:
+                with CrossAttnCapture(MODEL.smpl_dense_landmark_head.transformer.transformer) as lmk_cap:
+                    pred = MODEL(images)
+            else:
+                lmk_cap = None
                 pred = MODEL(images)
-    pr_lmk = pred["smpl_landmarks2d"][0].float().cpu().numpy()
-    pr_mask = torch.sigmoid(pred["person_mask_logits"][0].float()).cpu().numpy()
+    pr_mask = torch.sigmoid(pred["person_mask_logits"][0].float()).cpu().numpy()  # (S,Pslots,Hm,Wm)
     pr_pose = pred["smpl_pose"][0].float().cpu().numpy()        # (Pslots,72)
     pr_beta = pred["smpl_beta"][0].float().cpu().numpy()        # (Pslots,10)
     pr_mtr = pred["mesh_translate"][0].float().cpu().numpy()    # (Pslots,3)
     use_mesh_rot = pred.get("mesh_rot", None) is not None
-    Pp = pr_lmk.shape[1]
+    HAS_LMK = HAS_LMK and ("smpl_landmarks2d" in pred)
+    pr_lmk = pred["smpl_landmarks2d"][0].float().cpu().numpy() if HAS_LMK else None
+    Pp = pr_lmk.shape[1] if HAS_LMK else pr_mask.shape[1]
 
-    # ---- Hungarian: pred slot -> GT person (mean visible landmark L2) ----
+    # ---- Hungarian: pred slot -> GT person ----
+    # landmark demo: match by visible-landmark L2. mask-only demo: match by mask IoU.
+    # GT masks (patch grid) resized onto the pred mask grid so shapes always agree.
+    Hm, Wm = pr_mask.shape[-2:]
+    gm_pred_grid = np.stack([
+        np.stack([cv2.resize(gt_mask[s, j].astype(np.float32), (Wm, Hm),
+                             interpolation=cv2.INTER_NEAREST) for s in range(S)])
+        for j in range(P)]) > 0.5                                # (P, S, Hm, Wm) bool
     cost = np.full((Pp, P), 1e3, np.float32)
     for i in range(Pp):
+        pm_i = pr_mask[:, i] > 0.5                               # (S, Hm, Wm)
         for j in range(P):
-            v = gt_vis[:, j] > 0.5
-            if v.any():
-                cost[i, j] = np.linalg.norm(pr_lmk[:, i] - gt_lmk[:, j], axis=-1)[v].mean()
+            if HAS_LMK:
+                v = gt_vis[:, j] > 0.5
+                if v.any():
+                    cost[i, j] = np.linalg.norm(pr_lmk[:, i] - gt_lmk[:, j], axis=-1)[v].mean()
+            else:
+                gm_j = gm_pred_grid[j]
+                inter = np.logical_and(pm_i, gm_j).sum()
+                union = np.logical_or(pm_i, gm_j).sum()
+                cost[i, j] = 1.0 - inter / max(union, 1)          # 1 - IoU
     row, col = linear_sum_assignment(cost)
     slot_for_gt = {int(j): int(i) for i, j in zip(row, col)}    # gt person j -> pred slot i
 
@@ -234,10 +255,13 @@ def run(scene, num_views, max_people):
     # with 512 landmark queries attending to that view's patch grid. Collapse heads
     # and landmark ids to answer: "where did this person's 512 landmark queries look
     # in this view?"  Shape after capture: [S * Pslots, heads, 512, ph*pw].
-    lmk_attn = _select_attention_all_batches(lmk_cap.captured, "mean")
-    lmk_attn = lmk_attn.mean(dim=1)           # heads -> [S*Pslots, 512, ph*pw]
-    lmk_attn = lmk_attn.mean(dim=1)           # landmarks -> [S*Pslots, ph*pw]
-    lmk_attn_grid = lmk_attn.reshape(S, Pp, ph, pw).numpy()
+    # (mask-only checkpoint has no landmark head -> skip.)
+    lmk_attn_grid = None
+    if HAS_LMK and lmk_cap is not None:
+        lmk_attn = _select_attention_all_batches(lmk_cap.captured, "mean")
+        lmk_attn = lmk_attn.mean(dim=1)           # heads -> [S*Pslots, 512, ph*pw]
+        lmk_attn = lmk_attn.mean(dim=1)           # landmarks -> [S*Pslots, ph*pw]
+        lmk_attn_grid = lmk_attn.reshape(S, Pp, ph, pw).numpy()
 
     # ---- per-view overlays ----
     gt_uv = [project(gt_verts[j], gt_extr, gt_intr) for j in range(P)]     # each (S,V,2)
@@ -250,34 +274,46 @@ def run(scene, num_views, max_people):
             c = PERSON_COLORS[j % 4]; i = slot_for_gt[j]
             draw_points(gt_sm, gt_uv[j][s], c)
             draw_points(pr_sm, pr_uv[j][s], c)
-            for (x, y), vv in zip(_denorm(gt_lmk[s, j], W, H), gt_vis[s, j]):
-                if vv > 0.5 and 0 <= x < W and 0 <= y < H:
-                    cv2.circle(gt_l, (int(x), int(y)), 2, c, -1, cv2.LINE_AA)
-            for (x, y), vv in zip(_denorm(pr_lmk[s, i], W, H), gt_vis[s, j]):
-                if vv > 0.5 and 0 <= x < W and 0 <= y < H:
-                    cv2.circle(pr_l, (int(x), int(y)), 2, c, -1, cv2.LINE_AA)
+            if HAS_LMK:
+                for (x, y), vv in zip(_denorm(gt_lmk[s, j], W, H), gt_vis[s, j]):
+                    if vv > 0.5 and 0 <= x < W and 0 <= y < H:
+                        cv2.circle(gt_l, (int(x), int(y)), 2, c, -1, cv2.LINE_AA)
+                for (x, y), vv in zip(_denorm(pr_lmk[s, i], W, H), gt_vis[s, j]):
+                    if vv > 0.5 and 0 <= x < W and 0 <= y < H:
+                        cv2.circle(pr_l, (int(x), int(y)), 2, c, -1, cv2.LINE_AA)
             _tint(gt_m, gt_mask[s, j], c); _tint(pr_m, pr_mask[s, i], c)
-        gallery += [(gt_sm, f"view{s} · GT SMPL reproj"), (pr_sm, f"view{s} · Pred SMPL reproj"),
-                    (gt_l, f"view{s} · GT landmarks"), (pr_l, f"view{s} · Pred landmarks"),
-                    (gt_m, f"view{s} · GT mask"), (pr_m, f"view{s} · Pred mask")]
+        gallery += [(gt_sm, f"view{s} · GT SMPL reproj"), (pr_sm, f"view{s} · Pred SMPL reproj")]
+        if HAS_LMK:
+            gallery += [(gt_l, f"view{s} · GT landmarks"), (pr_l, f"view{s} · Pred landmarks")]
+        gallery += [(gt_m, f"view{s} · GT mask"), (pr_m, f"view{s} · Pred mask")]
         for j in range(P):
             heat = attn_grid[slot_for_gt[j], s]; heat = heat / (heat.max() + 1e-8)
             gallery.append((overlay_heatmap(base, heat, 0.6), f"view{s} · SMPL attn person {j}"))
-        for j in range(P):
-            heat = lmk_attn_grid[s, slot_for_gt[j]]
-            heat = heat / (heat.max() + 1e-8)
-            gallery.append((overlay_heatmap(base, heat, 0.6), f"view{s} · landmark attn person {j}"))
+        if lmk_attn_grid is not None:
+            for j in range(P):
+                heat = lmk_attn_grid[s, slot_for_gt[j]]
+                heat = heat / (heat.max() + 1e-8)
+                gallery.append((overlay_heatmap(base, heat, 0.6), f"view{s} · landmark attn person {j}"))
 
     # ---- metrics ----
-    rows = ["| person | slot | SMPL reproj L2 (px) | landmark L2 (px) | mask IoU |",
-            "|---|---|---|---|---|"]
+    if HAS_LMK:
+        rows = ["| person | slot | SMPL reproj L2 (px) | landmark L2 (px) | mask IoU |",
+                "|---|---|---|---|---|"]
+    else:
+        rows = ["| person | slot | SMPL reproj L2 (px) | mask IoU |",
+                "|---|---|---|---|"]
     for j in range(P):
-        i = slot_for_gt[j]; v = gt_vis[:, j] > 0.5
+        i = slot_for_gt[j]
         sm_l2 = float(np.linalg.norm(np.stack(pr_uv[j]) - np.stack(gt_uv[j]), axis=-1).mean())
-        lm_l2 = np.linalg.norm(pr_lmk[:, i] - gt_lmk[:, j], axis=-1)[v].mean() * W if v.any() else float("nan")
-        gm = gt_mask[:, j] > 0.5; pm = pr_mask[:, i] > 0.5
-        iou = (gm & pm).sum() / max((gm | pm).sum(), 1)
-        rows.append(f"| {j} | {i} | {sm_l2:.1f} | {lm_l2:.1f} | {iou:.3f} |")
+        pm = pr_mask[:, i] > 0.5                     # (S,Hm,Wm)
+        gm = gm_pred_grid[j]                          # (S,Hm,Wm), already on the pred grid
+        iou = np.logical_and(gm, pm).sum() / max(np.logical_or(gm, pm).sum(), 1)
+        if HAS_LMK:
+            v = gt_vis[:, j] > 0.5
+            lm_l2 = np.linalg.norm(pr_lmk[:, i] - gt_lmk[:, j], axis=-1)[v].mean() * W if v.any() else float("nan")
+            rows.append(f"| {j} | {i} | {sm_l2:.1f} | {lm_l2:.1f} | {iou:.3f} |")
+        else:
+            rows.append(f"| {j} | {i} | {sm_l2:.1f} | {iou:.3f} |")
     rot_mode = "mesh_rot(cam0)" if use_mesh_rot else "world root rot"
     md = (f"**scene** `{Path(scene).name}` · **{P} people · {S} views** · "
           f"avg_scale `{scale:.3f}` · rot `{rot_mode}`\n\n"
