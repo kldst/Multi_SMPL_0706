@@ -32,7 +32,7 @@ accum_steps: 1            # consider 4-8: Hungarian matching is noisy at batch=1
 patch_size: 14
 val_epoch_freq: 5
 enable_val: False
-max_img_per_gpu: 40       # 4 views/sample -> batch_size = floor(4/4) = 1 sample/step
+max_img_per_gpu: 20       # 4 views/sample -> batch_size = floor(4/4) = 1 sample/step
 
 limit_train_batches: null
 limit_val_batches: 10
