@@ -149,6 +149,18 @@ parser.add_argument(
     help="Run a raw Mamma sequence directory directly instead of launching Gradio.",
 )
 parser.add_argument(
+    "--demo-input-dir",
+    type=str,
+    default="",
+    help="Run one multi-view image folder headlessly instead of launching Gradio.",
+)
+parser.add_argument(
+    "--demo-image-ids",
+    type=str,
+    default="",
+    help="Image indices used with --demo-input-dir (for example: '0 1 2 3').",
+)
+parser.add_argument(
     "--demo-view",
     type=str,
     default="",
@@ -399,7 +411,12 @@ MY_MODEL_PATH = str(args.checkpoint)
 
 
 def load_checkpoint_state_dict(path: str) -> dict:
-    ckpt = torch.load(path, map_location="cpu")
+    # mmap avoids materializing large optimizer/scaler tensors when a full training
+    # checkpoint is used for inference (checkpoint_step_10000.pt is about 11 GB).
+    try:
+        ckpt = torch.load(path, map_location="cpu", mmap=True)
+    except (TypeError, RuntimeError):
+        ckpt = torch.load(path, map_location="cpu")
     return ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
 
 
@@ -3453,6 +3470,54 @@ def run_cli_mamma_sequence_demo(seq_dir: str, view_name: str, max_frames: int, f
     return gif_path
 
 
+def run_cli_image_folder_demo(input_dir: str, image_ids: str, fps: float) -> str:
+    """Run one synchronized multi-view folder through the full demo pipeline."""
+    input_path = Path(input_dir).resolve()
+    if not input_path.is_dir():
+        raise FileNotFoundError(input_path)
+    result = gradio_demo(
+        target_dir="None",
+        conf_thres=50,
+        mask_black_bg=False,
+        mask_white_bg=False,
+        mask_green_bg=False,
+        show_cam=True,
+        mask_sky=False,
+        prediction_mode="SMPL Only (Pose/Beta)",
+        input_image_dir=str(input_path),
+        image_ids=image_ids,
+        use_gt=False,
+        smpl_presence_threshold=SMPL_PRESENCE_THRESHOLD,
+        use_hungarian_smpl_mesh=False,
+        save_outputs=True,
+        overlay_gt_mesh=False,
+    )
+    (
+        glb_path,
+        log_msg,
+        smpl_obj_path,
+        target_dir,
+        _preview_paths,
+        _projection_paths,
+        error_text,
+        presence_text,
+        _per_person_text,
+    ) = result
+    if not target_dir or target_dir == "None" or not glb_path:
+        raise RuntimeError(f"CLI demo failed: {log_msg or error_text}")
+    print(f"[CLI-DEMO] target_dir={target_dir}")
+    print(f"[CLI-DEMO] glb={glb_path}")
+    print(f"[CLI-DEMO] smpl_obj={smpl_obj_path}")
+    if presence_text:
+        print(f"[CLI-DEMO] presence:\n{presence_text}")
+    projection_paths = run_projection_gallery(target_dir)
+    gif_path = os.path.join(target_dir, "projected_smpl_multiview.gif")
+    _save_gif_from_paths(projection_paths, gif_path, fps=fps)
+    print(f"[CLI-DEMO] projection_frames={len(projection_paths)}")
+    print(f"[CLI-DEMO] gif={gif_path}")
+    return gif_path
+
+
 def postprocess_existing_target_dir(target_dir: str, fps: float = 2.0) -> str:
     target_dir = str(target_dir)
     predictions_path = os.path.join(target_dir, "predictions.npz")
@@ -3994,6 +4059,14 @@ if str(args.demo_seq_dir or "").strip():
     )
     raise SystemExit(0)
 
+if str(args.demo_input_dir or "").strip():
+    run_cli_image_folder_demo(
+        input_dir=args.demo_input_dir,
+        image_ids=args.demo_image_ids or DEFAULT_IMAGE_IDS,
+        fps=args.demo_fps,
+    )
+    raise SystemExit(0)
+
 if str(args.postprocess_target_dir or "").strip():
     postprocess_existing_target_dir(
         target_dir=args.postprocess_target_dir,
@@ -4162,7 +4235,7 @@ with gr.Blocks(
                 value=initial_preview_images,
                 columns=4,
                 height="300px",
-                buttons=["download"],
+                show_download_button=True,
                 object_fit="contain",
                 preview=True,
             )
@@ -4191,7 +4264,7 @@ with gr.Blocks(
                         label="Projected Mesh on Processed Images",
                         columns=4,
                         height=680,
-                        buttons=["download"],
+                        show_download_button=True,
                         object_fit="contain",
                         preview=True,
                     )
@@ -4199,7 +4272,7 @@ with gr.Blocks(
                         label="Attention vs Predicted SMPL (heatmap + reprojected mesh outline + centroid gap)",
                         columns=1,
                         height=680,
-                        buttons=["download"],
+                        show_download_button=True,
                         object_fit="contain",
                         preview=True,
                     )
@@ -4208,7 +4281,7 @@ with gr.Blocks(
                         label="512 Landmarks and Predicted Person Masks",
                         columns=4,
                         height=680,
-                        buttons=["download"],
+                        show_download_button=True,
                         object_fit="contain",
                         preview=True,
                     )

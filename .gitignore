@@ -91,3 +91,10 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+/mamma
+/model
+/azcopy_linux_amd64_10.32.4
+/body_models
+/tools
+/.vscode

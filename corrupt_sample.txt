@@ -1,0 +1,1 @@
+azcopy copy "https://zbstore2026.blob.core.windows.net/g-019c8c93-9d1d-765e-9d2f-e3eb9ccb33f0/model.safetensors?se=2026-09-14T06%3A46%3A42Z&sp=rwdl&sv=2026-02-06&sr=c&sig=MBLdKaJOufr94Upl8qshasWnhZlO4eJzLSBCke8G2JE%3D" "." --recursive

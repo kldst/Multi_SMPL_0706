@@ -162,7 +162,7 @@ checkpoint:
   save_dir: logs/${exp_name}/ckpts
   save_freq: 1
   save_step_freq: 5000
-  resume_checkpoint_path: "/dataset/checkpoint_step_10000.pt"
+  resume_checkpoint_path: "/Multi_SMPL_0706/logs/mamma_mask_dpt/ckpts/checkpoint_49.pt"
   strict: False
   load_aggregator_only: False
   load_model_only: True  
@@ -171,7 +171,7 @@ checkpoint:
   # The SMPL resume checkpoint above has NO depth head, so point this at the
   # base VGGT checkpoint (a path loads depth_head.* from there; True would look
   # in the resume checkpoint itself).
-  init_mask_trunk_from_depth: /dataset/vggt/model.pt
+  init_mask_trunk_from_depth: /Multi_SMPL_0706/logs/mamma_mask_dpt/ckpts/checkpoint_49.pt
 
 
 loss:

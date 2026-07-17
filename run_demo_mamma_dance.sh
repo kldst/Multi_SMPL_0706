@@ -7,6 +7,8 @@
 #   data:       raw Mamma_mv_split (test split)
 #
 # Other modes:
+#   DEMO_MODE=maskdpt_eval_single ./run_demo_mamma_dance.sh # locally prepared eval-single frame
+#   DEMO_MODE=pretrain_eval_single ./run_demo_mamma_dance.sh # checkpoint_step_10000 on same frame
 #   DEMO_MODE=maskdpt_dance ./run_demo_mamma_dance.sh  # checkpoint_16 on MAMMA_eval_dance/test
 #   DEMO_MODE=pretrain      ./run_demo_mamma_dance.sh  # SMPL-only pretrain checkpoint_step_10000
 #   DEMO_MODE=overfit       ./run_demo_mamma_dance.sh  # mamma_small overfit run
@@ -16,7 +18,22 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_DIR"
 
-source /mnt/train-data-4-hdd/yian/anaconda/etc/profile.d/conda.sh
+CONDA_SH="${CONDA_SH:-}"
+if [[ -z "$CONDA_SH" ]]; then
+  for candidate in \
+    /train-data-3-hdd/yian/conda/etc/profile.d/conda.sh \
+    /mnt/train-data-4-hdd/yian/anaconda/etc/profile.d/conda.sh; do
+    if [[ -f "$candidate" ]]; then
+      CONDA_SH="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "$CONDA_SH" || ! -f "$CONDA_SH" ]]; then
+  echo "[run_demo] conda.sh not found. Set CONDA_SH=/path/to/etc/profile.d/conda.sh" >&2
+  exit 1
+fi
+source "$CONDA_SH"
 conda activate mamma
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-1}"
@@ -36,10 +53,17 @@ if [[ "$DEMO_MODE" == "maskdpt" ]]; then
   # mamma_overfit have a different slot count -> shape mismatch on load.
   CONFIG="${CONFIG:-mamma_mask_dpt}"
   CHECKPOINT="${CHECKPOINT:-$REPO_DIR/training/logs/mamma_mask_dpt/checkpoint_23.pt}"
-  # Raw Mamma_mv_split root; the demo globs */*/png under <root>/<split>.
   DATASET_ROOT="${DATASET_ROOT:-/mnt/train-data-4-hdd/yian/Mamma_mv_split}"
   DATASET_SPLIT="${DATASET_SPLIT:-test}"
   # trained with img_nums:[4,4] -> feed 4 views at inference to match.
+  export DEMO_IMAGE_IDS="${DEMO_IMAGE_IDS:-0 1 2 3}"
+elif [[ "$DEMO_MODE" == "maskdpt_eval_single" ]]; then
+  # Prepared by tools/prepare_mamma_eval_demo.py. Each run is one synchronized
+  # frame, with one IOI_XX.jpg per selected camera and a merged GT NPZ.
+  CONFIG="${CONFIG:-mamma_mask_dpt}"
+  CHECKPOINT="${CHECKPOINT:-$REPO_DIR/model/checkpoint_49.pt}"
+  DATASET_ROOT="${DATASET_ROOT:-$REPO_DIR/mamma/demo_eval_single}"
+  DATASET_SPLIT="${DATASET_SPLIT:-test}"
   export DEMO_IMAGE_IDS="${DEMO_IMAGE_IDS:-0 1 2 3}"
 elif [[ "$DEMO_MODE" == "maskdpt_dance" ]]; then
   # Same DPT-mask checkpoint, but on the ORGANIZED MAMMA_eval_dance eval set
@@ -51,6 +75,14 @@ elif [[ "$DEMO_MODE" == "maskdpt_dance" ]]; then
   DATASET_ROOT="${DATASET_ROOT:-$REPO_DIR/MAMMA_eval_dance}"
   DATASET_SPLIT="${DATASET_SPLIT:-test}"
   # feed 4 of the 32 views to match the [4,4] training distribution.
+  export DEMO_IMAGE_IDS="${DEMO_IMAGE_IDS:-0 1 2 3}"
+elif [[ "$DEMO_MODE" == "pretrain_eval_single" ]]; then
+  # SMPL-only 20-slot pretrain evaluated on the locally prepared synchronized
+  # four-camera frame. This checkpoint has no person-mask/landmark head.
+  CONFIG="${CONFIG:-0621_mamma_demo}"
+  CHECKPOINT="${CHECKPOINT:-$REPO_DIR/checkpoint_step_10000.pt}"
+  DATASET_ROOT="${DATASET_ROOT:-$REPO_DIR/mamma/demo_eval_single}"
+  DATASET_SPLIT="${DATASET_SPLIT:-test}"
   export DEMO_IMAGE_IDS="${DEMO_IMAGE_IDS:-0 1 2 3}"
 elif [[ "$DEMO_MODE" == "pretrain" ]]; then
   # The SMPL-only pretrain (checkpoint_step_10000): aggregator + camera + 20-slot
@@ -91,7 +123,17 @@ echo "[run_demo] checkpoint=$CHECKPOINT"
 echo "[run_demo] dataset_root=$DATASET_ROOT split=$DATASET_SPLIT"
 echo "[run_demo] image_ids=$DEMO_IMAGE_IDS"
 
-if [[ -n "${DEMO_SEQ_DIR:-}" ]]; then
+if [[ -n "${DEMO_INPUT_DIR:-}" ]]; then
+  echo "[run_demo] demo_input_dir=$DEMO_INPUT_DIR image_ids=${DEMO_IMAGE_IDS:-0 1 2 3}"
+  python demo_gradio_smpl_multi.py \
+    --config "$CONFIG" \
+    --checkpoint "$CHECKPOINT" \
+    --dataset-root "$DATASET_ROOT" \
+    --dataset-split "$DATASET_SPLIT" \
+    --demo-input-dir "$DEMO_INPUT_DIR" \
+    --demo-image-ids "${DEMO_IMAGE_IDS:-0 1 2 3}" \
+    --demo-fps "${DEMO_FPS:-2.0}"
+elif [[ -n "${DEMO_SEQ_DIR:-}" ]]; then
   echo "[run_demo] demo_seq_dir=$DEMO_SEQ_DIR sequence=${DEMO_SEQUENCE:-<auto>} view=${DEMO_VIEW:-<auto>} max_frames=${DEMO_MAX_FRAMES:-10}"
   python demo_gradio_smpl_multi.py \
     --config "$CONFIG" \
