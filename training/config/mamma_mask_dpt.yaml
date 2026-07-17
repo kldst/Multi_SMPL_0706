@@ -11,7 +11,7 @@ defaults:
 #* (hungarian_cost_mask_weight) so slot<->person assignment stays stable when
 #* people are in contact. If the mask alone fixes the identity mixing, add the
 #* landmark head back on top later.
-exp_name: mamma_mask_dpt
+exp_name: mamma_mask_dpt_larger_translate_weight
 
 debug_max_sequences: null
 debug_max_frames_per_sequence: null
@@ -191,11 +191,11 @@ loss:
     weight_pose: 1.0
     weight_beta: 0.001
     init_w: 1.0
-    weight_joints2d: 5.0
-    weight_joints3d: 5.0
+    weight_joints2d: 1.0
+    weight_joints3d: 1.0
     weight_vertices: 1.5
     weight_trans: 0.0
-    weight_mesh_translate: 1.0
+    weight_mesh_translate: 5.0
     weight_presence: 0.5
     presence_loss_type: focal
     presence_focal_alpha: null
