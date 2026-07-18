@@ -234,7 +234,7 @@ optim:
 
   optimizer:
     _target_: torch.optim.AdamW
-    lr: 1e-4
+    lr: 1e-5
     weight_decay: 0.0
 
   frozen_module_names:
@@ -274,7 +274,7 @@ optim:
             - _target_: fvcore.common.param_scheduler.CosineParamScheduler
               start_value: ${optim.optimizer.lr}
               end_value: 1e-8
-          lengths: [0.02, 0.98]
+          lengths: [0.01, 0.99]
           interval_scaling: ['rescaled', 'rescaled']
     weight_decay:
       - scheduler:
@@ -282,7 +282,7 @@ optim:
           value: 0.0
 
 
-max_epochs: 300
+max_epochs: 20
 
 model:
   _target_: vggt.models.vggt.VGGT
