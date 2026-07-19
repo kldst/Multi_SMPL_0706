@@ -11,7 +11,7 @@ defaults:
 #* (hungarian_cost_mask_weight) so slot<->person assignment stays stable when
 #* people are in contact. If the mask alone fixes the identity mixing, add the
 #* landmark head back on top later.
-exp_name: mamma_mask_dpt_larger_translate_weight
+exp_name: mamma_mask_dpt_noavgscale
 
 debug_max_sequences: null
 debug_max_frames_per_sequence: null
@@ -23,6 +23,10 @@ img_size: 518
 num_workers: 0
 seed_value: 42
 accum_steps: 1            # consider 4-8: Hungarian matching is noisy at batch=1
+# Keep the cam0 coordinate-frame normalization, but preserve the dataset's
+# original metric scale instead of dividing by the mean camera baseline.
+# Trainer will therefore set batch["avg_scale"] to 1.0.
+scale_by_extrinsics: False
 patch_size: 14
 val_epoch_freq: 5
 enable_val: False
@@ -234,7 +238,7 @@ optim:
 
   optimizer:
     _target_: torch.optim.AdamW
-    lr: 1e-5
+    lr: 1e-4
     weight_decay: 0.0
 
   frozen_module_names:
@@ -282,7 +286,7 @@ optim:
           value: 0.0
 
 
-max_epochs: 20
+max_epochs: 100
 
 model:
   _target_: vggt.models.vggt.VGGT
