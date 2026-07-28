@@ -52,6 +52,10 @@ _FLIP = np.diag([1.0, -1.0, -1.0])
 
 MODEL = None
 ARGS = None
+# Whether the cam0-gauge normalization divides by the mean camera baseline.
+# Overwritten in main() from the config so it matches how the checkpoint was
+# trained (mamma_mask_dpt.yaml sets scale_by_extrinsics: False).
+SCALE_BY_EXTRINSICS = True
 _FACES = None
 
 
@@ -81,9 +85,16 @@ def decode_people(pose, beta, trans, gender_ints):
 
 
 def avg_scale_from(gt_extr):
-    """gt_extr (S,3,4) -> avg_scale float (cam0 gauge, matches training normalization)."""
+    """gt_extr (S,3,4) -> avg_scale float (cam0 gauge, matches training normalization).
+
+    Uses the config's ``scale_by_extrinsics`` (set in main()) so the gauge matches
+    how the checkpoint was trained; with ``scale_by_extrinsics: False`` the metric
+    scale is preserved (avg_scale == 1.0).
+    """
     t = torch.as_tensor(gt_extr[None], dtype=torch.float32)
-    out = normalize_camera_extrinsics_points_and_3djoints_batch(extrinsics=t, scale_by_extrinsics=True)
+    out = normalize_camera_extrinsics_points_and_3djoints_batch(
+        extrinsics=t, scale_by_extrinsics=SCALE_BY_EXTRINSICS
+    )
     return float(np.asarray(out[-1]).reshape(-1)[0])
 
 
@@ -358,7 +369,7 @@ def build_ui():
 
 
 def main():
-    global MODEL, ARGS
+    global MODEL, ARGS, SCALE_BY_EXTRINSICS
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="mamma_overfit")
     ap.add_argument("--checkpoint", default=str(REPO / "training/logs/mamma_overfit/ckpts/checkpoint_300.pt"))
@@ -371,6 +382,15 @@ def main():
     ap.add_argument("--port", type=int, default=7863)
     ap.add_argument("--share", action="store_true")
     ARGS = ap.parse_args()
+
+    # Read scale_by_extrinsics from the training config so the demo gauge matches
+    # the checkpoint (mamma_mask_dpt.yaml -> False -> avg_scale == 1.0).
+    from hydra import compose, initialize
+    from omegaconf import OmegaConf
+    with initialize(version_base=None, config_path="training/config"):
+        _cfg = compose(config_name=ARGS.config)
+    SCALE_BY_EXTRINSICS = bool(OmegaConf.select(_cfg, "scale_by_extrinsics", default=True))
+    print(f"[CFG] config={ARGS.config} scale_by_extrinsics={SCALE_BY_EXTRINSICS}")
 
     MODEL = build_model(ARGS.config, ARGS.checkpoint, ARGS.device)
     demo = build_ui()

@@ -11,7 +11,7 @@ defaults:
 #* (hungarian_cost_mask_weight) so slot<->person assignment stays stable when
 #* people are in contact. If the mask alone fixes the identity mixing, add the
 #* landmark head back on top later.
-exp_name: mamma_mask_dpt_noavgscale
+exp_name: mamma_mask_dpt_noavgscale_1e-5
 
 debug_max_sequences: null
 debug_max_frames_per_sequence: null
@@ -166,7 +166,7 @@ checkpoint:
   save_dir: logs/${exp_name}/ckpts
   save_freq: 1
   save_step_freq: 5000
-  resume_checkpoint_path: "/Multi_SMPL_0706/logs/mamma_mask_dpt/ckpts/checkpoint_49.pt"
+  resume_checkpoint_path: "/Multi_SMPL_0706/logs/mamma_mask_dpt_noavgscale/ckpts/checkpoint_88.pt"
   strict: False
   load_aggregator_only: False
   load_model_only: True  
@@ -175,7 +175,7 @@ checkpoint:
   # The SMPL resume checkpoint above has NO depth head, so point this at the
   # base VGGT checkpoint (a path loads depth_head.* from there; True would look
   # in the resume checkpoint itself).
-  init_mask_trunk_from_depth: /Multi_SMPL_0706/logs/mamma_mask_dpt/ckpts/checkpoint_49.pt
+  init_mask_trunk_from_depth: /Multi_SMPL_0706/logs/mamma_mask_dpt_noavgscale/ckpts/checkpoint_88.pt
 
 
 loss:
@@ -199,7 +199,7 @@ loss:
     weight_joints3d: 1.0
     weight_vertices: 1.5
     weight_trans: 0.0
-    weight_mesh_translate: 5.0
+    weight_mesh_translate: 2.0
     weight_presence: 0.5
     presence_loss_type: focal
     presence_focal_alpha: null
@@ -238,7 +238,7 @@ optim:
 
   optimizer:
     _target_: torch.optim.AdamW
-    lr: 1e-4
+    lr: 1e-5
     weight_decay: 0.0
 
   frozen_module_names:

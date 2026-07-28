@@ -210,10 +210,18 @@ ENABLE_SMPL_MULTI_QUERY_TRANS = bool(
 ENABLE_SMPL_MULTI_QUERY = bool(
     OmegaConf.select(cfg, "model.enable_smpl_multi_query", default=False)
 )
+# Whether the cam0-gauge normalization also divides by the mean camera baseline
+# (scale_by_extrinsics). When False the dataset's original metric scale is kept
+# (avg_scale == 1.0). Read from the config so the demo matches how the checkpoint
+# was trained (mamma_mask_dpt.yaml sets this False).
+SCALE_BY_EXTRINSICS = bool(
+    OmegaConf.select(cfg, "scale_by_extrinsics", default=True)
+)
 print(
     f"[CFG] config={args.config} "
     f"enable_smpl_multi_query={ENABLE_SMPL_MULTI_QUERY} "
-    f"enable_smpl_multi_query_trans={ENABLE_SMPL_MULTI_QUERY_TRANS}"
+    f"enable_smpl_multi_query_trans={ENABLE_SMPL_MULTI_QUERY_TRANS} "
+    f"scale_by_extrinsics={SCALE_BY_EXTRINSICS}"
 )
 
 
@@ -1073,7 +1081,7 @@ def normalize_gt_cameras_joints_and_mesh(
     ) = normalize_camera_extrinsics_points_and_3djoints_batch(
         extrinsics=extrinsics_t,
         joints3d_world=joints_t,
-        scale_by_extrinsics=True,
+        scale_by_extrinsics=SCALE_BY_EXTRINSICS,
     )
     avg_scale = float(avg_scale_t.reshape(-1)[0].item())
     norm_vertices = normalize_vertices_to_camera0_gauge(raw_vertices, raw_extrinsics, avg_scale)
@@ -2298,7 +2306,7 @@ def normalize_mesh_vertices_from_gt_cameras(
     extrinsics_t = torch.as_tensor(np.asarray(raw_extrinsics, dtype=np.float32)).unsqueeze(0)
     norm_extrinsics_t, _, _, _, _, avg_scale_t = normalize_camera_extrinsics_points_and_3djoints_batch(
         extrinsics=extrinsics_t,
-        scale_by_extrinsics=True,
+        scale_by_extrinsics=SCALE_BY_EXTRINSICS,
     )
     avg_scale = float(avg_scale_t.reshape(-1)[0].item())
     norm_vertices = normalize_vertices_to_camera0_gauge(vertices_world, raw_extrinsics, avg_scale)
@@ -2587,7 +2595,7 @@ def compute_multi_prediction_errors(
         gt_extrinsics_t = torch.as_tensor(np.asarray(gt_extrinsics_raw, dtype=np.float32)).unsqueeze(0)
         norm_gt_extrinsics_t, _, _, _, _, avg_scale_t = normalize_camera_extrinsics_points_and_3djoints_batch(
             extrinsics=gt_extrinsics_t,
-            scale_by_extrinsics=True,
+            scale_by_extrinsics=SCALE_BY_EXTRINSICS,
         )
         gt_extrinsics = norm_gt_extrinsics_t.squeeze(0).detach().cpu().numpy().astype(np.float64)
         avg_scale = float(avg_scale_t.reshape(-1)[0].item())
@@ -2970,7 +2978,7 @@ def build_gt_scene_mesh_for_prediction(
         extrinsics_t = torch.as_tensor(np.asarray(raw_extrinsics, dtype=np.float32)).unsqueeze(0)
         _, _, _, _, _, avg_scale_t = normalize_camera_extrinsics_points_and_3djoints_batch(
             extrinsics=extrinsics_t,
-            scale_by_extrinsics=True,
+            scale_by_extrinsics=SCALE_BY_EXTRINSICS,
         )
         avg_scale = float(avg_scale_t.reshape(-1)[0].item())
 

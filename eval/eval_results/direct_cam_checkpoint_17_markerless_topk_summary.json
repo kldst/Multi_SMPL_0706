@@ -1,0 +1,33 @@
+{
+  "config": "mamma_mask_direct_cam",
+  "checkpoint": "/train-data-3-hdd/yian/Multi_SMPL_0706/model/direct_cam/checkpoint_17.pt",
+  "dataset": "/train-data-3-hdd/yian/Multi_SMPL_0706/MAMMA_markerless_multiple_people/test",
+  "image_ids": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "presence_threshold": 0.5,
+  "selection_mode": "topk_gt",
+  "all_frames_requested": true,
+  "discovered_frames": 14975,
+  "evaluated_frames": 14975,
+  "successful_frames": 14975,
+  "failed_frames": 0,
+  "gt_people": 64366,
+  "selected_predicted_people": 64366,
+  "matched_people": 64366,
+  "miss_count": 0,
+  "fp_count": 0,
+  "precision": 1.0,
+  "recall": 1.0,
+  "f1": 1.0,
+  "mpjpe_root_aligned_mm": 158.75753818585113,
+  "pa_mpjpe_mm": 87.82848573444784,
+  "joint_count": 1544784,
+  "elapsed_seconds": 4941.854442119598,
+  "per_frame_csv": "/train-data-3-hdd/yian/Multi_SMPL_0706/eval/eval_results/direct_cam_checkpoint_17_markerless_topk_summary.csv",
+  "coordinate_note": "First 24 SMPL joints; joint 0 root alignment. GT root orientation is rotated into camera0 for mesh_rot checkpoints. Units are millimetres.",
+  "config_scale_by_extrinsics": true
+}
