@@ -2,6 +2,7 @@ import logging
 import os
 import pickle
 import random
+from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -122,9 +123,14 @@ class SysSMPLMultiDataset(BaseDataset):
         if self.max_num_people is None:
             self.max_num_people = inferred_max_people
         elif inferred_max_people > self.max_num_people:
-            raise ValueError(
-                f"max_num_people={self.max_num_people} is smaller than observed people count "
-                f"{inferred_max_people}. Increase SysSMPLMultiDataset.max_num_people."
+            # get_data already truncates with min(person_count, max_num_people), so a
+            # crowded scene should cost you the extra people, not the whole training
+            # run.  Raising here used to kill startup outright.
+            logging.warning(
+                "SysSMPLMulti: observed %d people but max_num_people=%d; the extra "
+                "people will be TRUNCATED. Raise max_num_people (and model."
+                "smpl_num_people) to keep them.",
+                inferred_max_people, self.max_num_people,
             )
         self.sequence_list = list(self.data_store.keys())
         self.sequence_list_len = len(self.sequence_list)
@@ -282,6 +288,12 @@ class SysSMPLMultiDataset(BaseDataset):
 
         data_store: Dict[str, List[Dict[str, np.ndarray]]] = {}
         bad_pyds: List[str] = []
+        # Every frame that does NOT make it into data_store is counted here, so a
+        # silently-empty dataset is visible in the log instead of looking like a
+        # successful build (see the per-sequence summary at the end).
+        drops: Dict[str, int] = defaultdict(int)
+        per_seq_kept: Dict[str, int] = {}
+        per_seq_seen: Dict[str, int] = {}
         total_seqs = len(seq_dirs)
         logging.info(
             "SysSMPLMulti: building index over %d sequences (serial, reads 1 pyd per frame/view)...",
@@ -292,32 +304,20 @@ class SysSMPLMultiDataset(BaseDataset):
             frame_items = sorted(grouped.items())
             if self.max_frames_per_sequence is not None:
                 frame_items = frame_items[: int(self.max_frames_per_sequence)]
+            kept_here = 0
+            per_seq_seen[str(seq_dir)] = len(frame_items)
             for frame, views in frame_items:
                 if len(views) < self.min_num_images:
+                    drops["too_few_views"] += 1
                     continue
 
-                try:
-                    first_people = self._load_pickle(seq_dir / views[0] / f"{frame}.data.pyd")
-                except Exception:  # corrupt/unreadable pyd -> skip this frame
-                    bad_pyds.append(str(seq_dir / views[0] / f"{frame}.data.pyd"))
-                    continue
-                if not isinstance(first_people, dict) or not first_people:
-                    continue
-                person_ids = sorted(first_people.keys(), key=lambda item: int(item))
-                people_params = {}
-                for person_id in person_ids:
-                    person = first_people[person_id]
-                    people_params[person_id] = {
-                        "person_key": f"person_{int(person_id):02d}",
-                        "smpl_pose": np.asarray(person["pose_world"], dtype=np.float32).reshape(-1)[:72],
-                        "smpl_beta": np.asarray(person["shape"], dtype=np.float32).reshape(-1)[:10],
-                        "smpl_trans": np.asarray(person["trans_world"], dtype=np.float32).reshape(-1)[:3],
-                        "gender": person.get("gender", "neutral"),
-                        # instance-mask value for this person == person_idx + 1.
-                        "person_idx": int(person.get("person_idx", int(person_id))),
-                    }
-
-                view_annos = []
+                # Read every view's pyd ONCE up front.  The people set is then the
+                # UNION over views, not whatever the alphabetically-first view
+                # happened to annotate: the SMPL params are world-frame and are
+                # byte-identical across views, so a person occluded in one view is
+                # still fully supervised in 3D from the others.  Only that view's
+                # 2D targets get switched off (``visible_in_view`` below).
+                view_people = []
                 for view_name in views:
                     data_path = seq_dir / view_name / f"{frame}.data.pyd"
                     image_path = self._raw_image_path(seq_dir, view_name, frame)
@@ -330,20 +330,65 @@ class SysSMPLMultiDataset(BaseDataset):
                         continue
                     if not isinstance(frame_people, dict) or not frame_people:
                         continue
-                    cam_person = next(iter(frame_people.values()))
-                    camera = self._parse_camera(cam_person["cam_int"], cam_person["cam_ext"])
+                    camera = self._parse_camera(
+                        next(iter(frame_people.values()))["cam_int"],
+                        next(iter(frame_people.values()))["cam_ext"],
+                    )
                     if camera is None:
+                        drops["bad_camera"] += 1
                         continue
+                    view_people.append((view_name, frame_people, image_path, data_path, camera))
 
+                if len(view_people) < self.min_num_images:
+                    drops["too_few_readable_views"] += 1
+                    continue
+
+                person_ids = sorted(
+                    {pid for _, fp, _, _, _ in view_people for pid in fp},
+                    key=lambda item: int(item),
+                )
+                people_params = {}
+                for person_id in person_ids:
+                    person = next(fp[person_id] for _, fp, _, _, _ in view_people
+                                  if person_id in fp)
+                    people_params[person_id] = {
+                        "person_key": f"person_{int(person_id):02d}",
+                        # raw pyd key, needed to look this person up in a specific
+                        # view's pyd for the landmark / contact GT.
+                        "pyd_key": person_id,
+                        "smpl_pose": np.asarray(person["pose_world"], dtype=np.float32).reshape(-1)[:72],
+                        "smpl_beta": np.asarray(person["shape"], dtype=np.float32).reshape(-1)[:10],
+                        "smpl_trans": np.asarray(person["trans_world"], dtype=np.float32).reshape(-1)[:3],
+                        "gender": person.get("gender", "neutral"),
+                        # instance-mask value for this person == person_idx + 1.
+                        "person_idx": int(person.get("person_idx", int(person_id))),
+                    }
+
+                view_annos = []
+                for view_name, frame_people, image_path, data_path, camera in view_people:
+                    # Full-length and in a fixed order for EVERY view, so position i
+                    # is the same person everywhere.  The old code filtered this list
+                    # per view, which both changed its length (hence the equality
+                    # guard below dropping whole frames) and silently mis-aligned
+                    # positional indexing in get_data.
                     people_annos = [
-                        dict(people_params[person_id])
+                        dict(people_params[person_id],
+                             visible_in_view=bool(person_id in frame_people))
                         for person_id in person_ids
-                        if person_id in people_params and person_id in frame_people
                     ]
                     if not people_annos:
                         continue
 
-                    mask_path = data_path.with_name(f"{frame}.mask.jpg")
+                    # The instance mask ships as .jpg in some scenes and .png in
+                    # others (harmony4d vs moyo).  Hard-coding .jpg silently left
+                    # mask_path=None for the .png scenes, which then trained the
+                    # mask head against an all-zero target for every person.
+                    mask_path = None
+                    for suffix in (".mask.jpg", ".mask.png", ".mask.jpeg"):
+                        candidate = data_path.with_name(f"{frame}{suffix}")
+                        if candidate.is_file():
+                            mask_path = candidate
+                            break
                     view_annos.append(
                         {
                             "image_path": str(image_path),
@@ -354,18 +399,28 @@ class SysSMPLMultiDataset(BaseDataset):
                             "raw_mamma": True,
                             # for on-the-fly landmark / mask GT (loaded lazily in get_data)
                             "data_path": str(data_path),
-                            "mask_path": str(mask_path) if mask_path.is_file() else None,
+                            "mask_path": str(mask_path) if mask_path is not None else None,
                         }
                     )
 
-                if len(view_annos) >= self.min_num_images and len({a["num_people"] for a in view_annos}) == 1:
-                    rel = seq_dir.name
-                    try:
-                        rel = str(seq_dir.relative_to(self.data_root))
-                    except ValueError:
-                        pass
-                    data_store[f"raw_mamma_{rel}_frame_{frame}"] = view_annos
+                if len(view_annos) < self.min_num_images:
+                    drops["too_few_views_after_parse"] += 1
+                    continue
+                if len({a["num_people"] for a in view_annos}) != 1:
+                    # Should now be impossible (every view gets the same full list);
+                    # kept as an assertion-style guard against future regressions.
+                    drops["inconsistent_num_people"] += 1
+                    continue
 
+                rel = seq_dir.name
+                try:
+                    rel = str(seq_dir.relative_to(self.data_root))
+                except ValueError:
+                    pass
+                data_store[f"raw_mamma_{rel}_frame_{frame}"] = view_annos
+                kept_here += 1
+
+            per_seq_kept[str(seq_dir)] = kept_here
             if seq_i % 20 == 0 or seq_i == total_seqs:
                 logging.info(
                     "SysSMPLMulti: built %d/%d sequences (%d frames so far)",
@@ -377,6 +432,23 @@ class SysSMPLMultiDataset(BaseDataset):
                 "SysSMPLMulti: skipped %d unreadable/corrupt pyd file(s) during build (e.g. %s)",
                 len(bad_pyds), ", ".join(bad_pyds[:5]),
             )
+
+        total_seen = sum(per_seq_seen.values())
+        logging.info(
+            "SysSMPLMulti build summary: %d/%d candidate frames kept (%.0f%%) from %d sequence dir(s)",
+            len(data_store), total_seen,
+            100.0 * len(data_store) / max(total_seen, 1), total_seqs,
+        )
+        if drops:
+            logging.warning(
+                "SysSMPLMulti: dropped frames by reason: %s",
+                ", ".join(f"{k}={v}" for k, v in sorted(drops.items())),
+            )
+        for seq_path, seen in sorted(per_seq_seen.items()):
+            kept = per_seq_kept.get(seq_path, 0)
+            log = logging.warning if kept == 0 else logging.info
+            log("SysSMPLMulti:   %4d/%4d frames  %s%s",
+                kept, seen, seq_path, "   <-- CONTRIBUTES NOTHING" if kept == 0 else "")
 
         return data_store
 
@@ -624,12 +696,19 @@ class SysSMPLMultiDataset(BaseDataset):
             floor_contact_gt = None
             if emit_lmk or emit_ct:
                 view_pyd = view_pyds[view_i]   # pre-loaded & validated in _select_good_views
-                pyd_ids = sorted(view_pyd.keys(), key=lambda x: int(x))
+                # (pyd_ids no longer used: people are looked up by pyd_key below)
             if emit_lmk:
                 landmarks2d_orig = np.zeros((padded_people, 512, 2), dtype=np.float32)
                 landmarks_vis = np.zeros((padded_people, 512), dtype=np.float32)
                 for person_idx in range(person_count):
-                    p = view_pyd[pyd_ids[person_idx]]
+                    # Look the person up by pyd key, never positionally: a person can
+                    # be absent from THIS view's pyd (occlusion) while still being a
+                    # real person in the frame, so pyd_ids[person_idx] would silently
+                    # be a different person -- or out of range.
+                    key = people[person_idx].get("pyd_key")
+                    if key is None or key not in view_pyd:
+                        continue          # visibility stays 0 -> unsupervised in this view
+                    p = view_pyd[key]
                     v2d = np.asarray(p["vertices2d"], dtype=np.float32)      # (10475,2)
                     landmarks2d_orig[person_idx] = downsample_vertices(self._verts512, v2d)
                     vv = np.asarray(p["vertex_visibility"], dtype=np.float32).reshape(-1)
@@ -645,7 +724,12 @@ class SysSMPLMultiDataset(BaseDataset):
                 contact_gt = np.zeros((padded_people, 512), dtype=np.float32)
                 floor_contact_gt = np.zeros((padded_people, 512), dtype=np.float32)
                 for person_idx in range(person_count):
-                    p = view_pyd[pyd_ids[person_idx]]
+                    key = people[person_idx].get("pyd_key")
+                    if key is None or key not in view_pyd:
+                        contact_gt[person_idx] = -1.0        # absent here -> ignore
+                        floor_contact_gt[person_idx] = -1.0
+                        continue
+                    p = view_pyd[key]
                     vis512 = downsample_visibility(
                         self._verts512,
                         np.asarray(p["vertex_visibility"], dtype=np.float32).reshape(1, -1),
@@ -711,6 +795,13 @@ class SysSMPLMultiDataset(BaseDataset):
             joints2d_new = track_new[:n_joint_pts].reshape(padded_people, 24, 2)
             if confidence is not None:
                 joints_conf = confidence[:n_joint_pts].reshape(padded_people, 24)
+                # process_one_image's confidence is only an IN-FRAME test, so a person
+                # occluded in THIS view still scores 1.  Zero those: their 3D
+                # supervision is unaffected, only this view's 2D reprojection is
+                # skipped -- which is the whole point of a multi-view setup.
+                for person_idx in range(person_count):
+                    if not people[person_idx].get("visible_in_view", True):
+                        joints_conf[person_idx] = 0.0
             else:
                 joints_conf = None
 

@@ -11,7 +11,7 @@ defaults:
 #* (hungarian_cost_mask_weight) so slot<->person assignment stays stable when
 #* people are in contact. If the mask alone fixes the identity mixing, add the
 #* landmark head back on top later.
-exp_name: mamma_mask_dpt_noavgscale_3e-5
+exp_name: mamma_mask_dpt_noavgscale_5e-5
 
 debug_max_sequences: null
 debug_max_frames_per_sequence: null
