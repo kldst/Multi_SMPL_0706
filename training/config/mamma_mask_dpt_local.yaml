@@ -30,7 +30,9 @@ scale_by_extrinsics: False
 patch_size: 14
 val_epoch_freq: 5
 enable_val: False
-max_img_per_gpu: 40       # 4 views/sample -> batch_size = floor(4/4) = 1 sample/step
+# Fixed 8-view samples. DynamicBatchSampler uses
+# batch_size=floor(max_img_per_gpu / sampled_view_count), so 8/8 keeps B=1.
+max_img_per_gpu: 8
 
 limit_train_batches: null
 limit_val_batches: 10
@@ -57,10 +59,11 @@ data:
       dataset_configs:
         - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
           split: train
-          SysSMPL_DIR: /dataset/mamma
-          SysSMPL_ANNOTATION_DIR: /dataset/mamma
+          SysSMPL_DIR: /train-data-3-hdd/yian/Multi_SMPL_0706/mamma/mamma
+          SysSMPL_ANNOTATION_DIR: /train-data-3-hdd/yian/Multi_SMPL_0706/mamma/mamma
           max_num_people: 6
-          min_num_images: 4
+          # Keep only frames that can always supply the configured 8 distinct views.
+          min_num_images: 8
           # landmark/contact OFF for this ablation; mask ON at pixel level.
           emit_landmarks: False
           emit_contact: False
@@ -90,10 +93,10 @@ data:
       dataset_configs:
         - _target_: training.data.datasets.sys_smpl_multi.SysSMPLMultiDataset
           split: test
-          SysSMPL_DIR: /dataset/mamma
-          SysSMPL_ANNOTATION_DIR: /dataset/mamma
+          SysSMPL_DIR: /train-data-3-hdd/yian/Multi_SMPL_0706/mamma/mamma
+          SysSMPL_ANNOTATION_DIR: /train-data-3-hdd/yian/Multi_SMPL_0706/mamma/mamma
           max_num_people: 6
-          min_num_images: 4
+          min_num_images: 8
           emit_landmarks: False
           emit_contact: False
           emit_person_mask: True
@@ -166,7 +169,7 @@ checkpoint:
   save_dir: logs/${exp_name}/ckpts
   save_freq: 1
   save_step_freq: 5000
-  resume_checkpoint_path: "/dataset/checkpoint_6.pt"
+  resume_checkpoint_path: "/train-data-3-hdd/yian/Multi_SMPL_0706/model/no_avg/checkpoint_18.pt"
   strict: False
   load_aggregator_only: False
   load_model_only: True  
@@ -175,13 +178,13 @@ checkpoint:
   # The SMPL resume checkpoint above has NO depth head, so point this at the
   # base VGGT checkpoint (a path loads depth_head.* from there; True would look
   # in the resume checkpoint itself).
-  init_mask_trunk_from_depth: /dataset/checkpoint_6.pt
+  init_mask_trunk_from_depth: /train-data-3-hdd/yian/Multi_SMPL_0706/model/no_avg/checkpoint_18.pt
 
 
 loss:
   _target_: loss.MultitaskLoss
   # local path (this box has no /dataset mount; matches the dataset paths above)
-  smplx_model_dir: /dataset/smplx_models
+  smplx_model_dir: /train-data-3-hdd/yian/Multi_SMPL_0706/smpl_models
   camera:
     weight: 5.0
     loss_type: "l1"
@@ -199,7 +202,7 @@ loss:
     weight_joints3d: 1.0
     weight_vertices: 1.5
     weight_trans: 0.0
-    weight_mesh_translate: 2.0
+    weight_mesh_translate: 5.0
     weight_presence: 0.5
     presence_loss_type: focal
     presence_focal_alpha: null
@@ -238,7 +241,7 @@ optim:
 
   optimizer:
     _target_: torch.optim.AdamW
-    lr: 5e-5
+    lr: 3e-5
     weight_decay: 0.0
 
   frozen_module_names:
