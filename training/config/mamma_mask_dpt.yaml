@@ -60,7 +60,7 @@ data:
           SysSMPL_DIR: /dataset/mamma
           SysSMPL_ANNOTATION_DIR: /dataset/mamma
           max_num_people: 6
-          min_num_images: 4
+          min_num_images: 8
           # landmark/contact OFF for this ablation; mask ON at pixel level.
           emit_landmarks: False
           emit_contact: False
@@ -93,7 +93,7 @@ data:
           SysSMPL_DIR: /dataset/mamma
           SysSMPL_ANNOTATION_DIR: /dataset/mamma
           max_num_people: 6
-          min_num_images: 4
+          min_num_images: 8
           emit_landmarks: False
           emit_contact: False
           emit_person_mask: True
