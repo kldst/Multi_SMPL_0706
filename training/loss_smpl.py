@@ -64,6 +64,38 @@ def binary_focal_loss_with_logits(
     return loss.sum()
 
 
+def rotation_geodesic_angle(
+    pred_rotmat: torch.Tensor,
+    gt_rotmat: torch.Tensor,
+) -> torch.Tensor:
+    """Return the SO(3) geodesic angle in radians.
+
+    ``atan2(sin(theta), cos(theta))`` retains a useful slope much closer to pi
+    than the chordal/Frobenius pose loss used below.  The calculation is kept in
+    fp32 because root flips are precisely where bf16 rounding is most harmful.
+    """
+    pred_rotmat = pred_rotmat.float()
+    gt_rotmat = gt_rotmat.float()
+    relative = gt_rotmat.transpose(-1, -2) @ pred_rotmat
+
+    cos_theta = 0.5 * (
+        relative.diagonal(dim1=-2, dim2=-1).sum(dim=-1) - 1.0
+    )
+    cos_theta = cos_theta.clamp(-1.0, 1.0)
+
+    # The norm of this vector is 2 * |sin(theta)|.
+    skew = torch.stack(
+        (
+            relative[..., 2, 1] - relative[..., 1, 2],
+            relative[..., 0, 2] - relative[..., 2, 0],
+            relative[..., 1, 0] - relative[..., 0, 1],
+        ),
+        dim=-1,
+    )
+    sin_theta = 0.5 * torch.linalg.vector_norm(skew, dim=-1)
+    return torch.atan2(sin_theta, cos_theta)
+
+
 
 def smpl_losses_plus_from_axis_angle(
     pred_pose_aa: torch.Tensor,
@@ -73,6 +105,7 @@ def smpl_losses_plus_from_axis_angle(
     pred_pose_aa_0: torch.Tensor | None = None,
     pose_weight: float = 1.0,
     beta_weight: float = 1.0,
+    global_orient_weight: float = 0.0,
     init_w: float = 1.0,
     loss_type: str = "l1",
     has_smpl: torch.Tensor | None = None,
@@ -120,6 +153,15 @@ def smpl_losses_plus_from_axis_angle(
     pose_loss_final = ((R_pred - R_gt) ** 2).sum(dim=(-1, -2)).mean(dim=-1)  # (B,S)
     pose_loss_init = ((R_pred0 - R_gt) ** 2).sum(dim=(-1, -2)).mean(dim=-1)  # (B,S)
 
+    # Supervise the cam0-frame root separately instead of letting it contribute
+    # only 1/24 of the aggregate pose loss. Recompute these three rotations in
+    # fp32 so the near-pi geodesic remains numerically meaningful under AMP.
+    R_root_pred = axis_angle_to_rotmat(pred_pose_aa[..., :3].float()).squeeze(-3)
+    R_root_gt = axis_angle_to_rotmat(gt_pose_aa[..., :3].float()).squeeze(-3)
+    R_root_pred0 = axis_angle_to_rotmat(pred_pose_aa_0[..., :3].float()).squeeze(-3)
+    global_orient_final = rotation_geodesic_angle(R_root_pred, R_root_gt)  # (B,S)
+    global_orient_init = rotation_geodesic_angle(R_root_pred0, R_root_gt)  # (B,S)
+
     if loss_type == "l1":
         beta_loss = (pred_beta - gt_beta).abs().mean(dim=-1)  # (B,S)
     elif loss_type == "l2":
@@ -132,13 +174,23 @@ def smpl_losses_plus_from_axis_angle(
     loss_pose_final = (pose_loss_final * has_smpl).sum() / denom
     loss_pose_init = (pose_loss_init * has_smpl).sum() / denom
     loss_beta = (beta_loss * has_smpl).sum() / denom
+    loss_global_orient = (global_orient_final * has_smpl).sum() / denom
+    loss_global_orient_init = (global_orient_init * has_smpl).sum() / denom
 
-    total = pose_weight * loss_pose_final + pose_weight * init_w * loss_pose_init + beta_weight * loss_beta
+    total = (
+        pose_weight * loss_pose_final
+        + pose_weight * init_w * loss_pose_init
+        + beta_weight * loss_beta
+        + global_orient_weight * loss_global_orient
+        + global_orient_weight * init_w * loss_global_orient_init
+    )
     return total, {
         "loss_smpl_plus": total,
         "loss_smpl_plus_pose": loss_pose_final,
         "loss_smpl_plus_pose_init": loss_pose_init,
         "loss_smpl_plus_beta": loss_beta,
+        "loss_smpl_global_orient": loss_global_orient,
+        "loss_smpl_global_orient_init": loss_global_orient_init,
     }
 
 
@@ -151,6 +203,7 @@ def compute_smpl_loss(
     loss_type_joints3d: str | None = None,
     weight_pose: float = 1.0,
     weight_beta: float = 0.1,
+    weight_global_orient: float = 0.0,
     weight_trans: float = 0.0,
     weight_mesh_translate: float = 0.0,
     weight_presence: float = 1.0,
@@ -452,6 +505,8 @@ def compute_smpl_loss(
     loss_joints3d = (pred_pose * 0.0).mean()
     loss_vertices = (pred_pose * 0.0).mean()
     loss_smpl_losses = (pred_pose * 0.0).mean()
+    loss_global_orient = (pred_pose * 0.0).mean()
+    loss_global_orient_init = (pred_pose * 0.0).mean()
     loss_trans = (pred_pose * 0.0).mean()
     loss_mesh_translate = (pred_pose * 0.0).mean()
     loss_presence = (pred_pose * 0.0).mean()
@@ -513,7 +568,7 @@ def compute_smpl_loss(
             raise ValueError(f"Unknown presence_loss_type: {presence_loss_type}")
 
     #* SMPL losses (pose/beta) with optional init pose (pred_pose_0)
-    if weight_pose > 0.0 or weight_beta > 0.0:
+    if weight_pose > 0.0 or weight_beta > 0.0 or weight_global_orient > 0.0:
         pred_pose_for_smpl = pred_pose[..., :72]
         gt_pose_for_smpl = gt_pose[..., :72]
         pred_pose_0_for_smpl = pred_pose_0[..., :72] if pred_pose_0 is not None else None
@@ -526,11 +581,14 @@ def compute_smpl_loss(
             pred_pose_aa_0=pred_pose_0_for_smpl,
             pose_weight=weight_pose,
             beta_weight=weight_beta,
+            global_orient_weight=weight_global_orient,
             init_w=init_w,
             loss_type=loss_type,
             has_smpl=has_smpl,
         )
         loss_smpl_losses = smpl_plus_total
+        loss_global_orient = _smpl_plus_dict["loss_smpl_global_orient"]
+        loss_global_orient_init = _smpl_plus_dict["loss_smpl_global_orient_init"]
 
     # Shared SMPL decode (only when needed)
     need_smpl_decode = (
@@ -1004,6 +1062,8 @@ def compute_smpl_loss(
         "loss_floor_contact": loss_floor_contact,
         "contact_positive_frac": contact_positive_frac,
         "loss_smpl_losses": loss_smpl_losses,
+        "loss_smpl_global_orient": loss_global_orient,
+        "loss_smpl_global_orient_init": loss_global_orient_init,
         "loss_smpl_trans": loss_trans,
         "loss_mesh_translate": loss_mesh_translate,
         "loss_smpl_presence": loss_presence,
