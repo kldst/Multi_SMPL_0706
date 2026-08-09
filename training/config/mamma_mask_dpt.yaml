@@ -200,7 +200,7 @@ loss:
     # Explicit cam0-frame root rotation supervision (radians). The aggregate
     # pose loss averages the root with 23 local joints, so start with a separate
     # moderate weight; sweep 0.1/0.25/0.5 after checking flip-rate metrics.
-    weight_global_orient: 0.25
+    weight_global_orient: 0.0
     weight_beta: 0.001
     init_w: 1.0
     weight_joints2d: 1.0
