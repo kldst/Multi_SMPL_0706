@@ -188,7 +188,7 @@ checkpoint:
   save_dir: logs/${exp_name}/ckpts
   save_freq: 1
   save_step_freq: 5000
-  resume_checkpoint_path: "/logs/mamma_mask_dpt_noavgscale_5e-5/ckpts/checkpoint_19.pt"
+  resume_checkpoint_path: "/Multi_SMPL_0706/logs/mamma_mask_dpt_noavgscale_5e-5_continue/ckpts/checkpoint_7.pt"
   strict: False
   load_aggregator_only: False
   load_model_only: True  
@@ -264,7 +264,7 @@ optim:
 
   optimizer:
     _target_: torch.optim.AdamW
-    lr: 2e-5
+    lr: 1e-5
     weight_decay: 0.0
 
   frozen_module_names:
