@@ -23,7 +23,7 @@ debug_val_max_frames_per_sequence: null
 # original single-frame data/model/loss path.
 temporal_training:
   enabled: True
-  clip_length: 3          # order-2 pose/translation needs at least 3 frames
+  clip_length: 5          # order-2 pose/translation needs at least 3 frames
   clip_stride: 1
   loss_type: l1
   pose_order: 2
