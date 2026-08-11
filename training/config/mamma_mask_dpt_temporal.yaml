@@ -47,7 +47,7 @@ val_epoch_freq: 5
 enable_val: False
 # The sampler counts T*V images when temporal training is enabled. With the
 # defaults T=3 and V=8, this gives one clip (24 images) per optimizer step.
-max_img_per_gpu: 40
+max_img_per_gpu: 120
 
 limit_train_batches: null
 limit_val_batches: 10
