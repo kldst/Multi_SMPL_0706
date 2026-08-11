@@ -62,7 +62,12 @@ class DynamicTorchDataset(ABC):
             self.aspect_ratio_range,
             self.image_num_range,
             seed=seed,
-            max_img_per_gpu=max_img_per_gpu
+            max_img_per_gpu=max_img_per_gpu,
+            temporal_multiplier=(
+                int(getattr(common_config, "temporal_clip_length", 1))
+                if bool(getattr(common_config, "use_temporal_training", False))
+                else 1
+            ),
         )
 
     def get_loader(self, epoch):
@@ -103,7 +108,8 @@ class DynamicBatchSampler(Sampler):
                  image_num_range,
                  epoch=0,
                  seed=42,
-                 max_img_per_gpu=48):
+                 max_img_per_gpu=48,
+                 temporal_multiplier=1):
         """
         Initializes the dynamic batch sampler.
 
@@ -134,6 +140,7 @@ class DynamicBatchSampler(Sampler):
 
         # Maximum image number per GPU
         self.max_img_per_gpu = max_img_per_gpu
+        self.temporal_multiplier = max(1, int(temporal_multiplier))
 
         # Set the epoch for the sampler
         self.set_epoch(epoch + seed)
@@ -171,7 +178,11 @@ class DynamicBatchSampler(Sampler):
                 )
 
                 # Calculate batch size based on max images per GPU and current image number
-                batch_size = self.max_img_per_gpu / random_image_num
+                # A temporal dataset sample contains T independent multi-view frames,
+                # even though ``img_nums`` continues to mean views PER frame.
+                batch_size = self.max_img_per_gpu / (
+                    random_image_num * self.temporal_multiplier
+                )
                 batch_size = np.floor(batch_size).astype(int)
                 batch_size = max(1, batch_size)  # Ensure batch size is at least 1
 
@@ -206,7 +217,10 @@ class DynamicBatchSampler(Sampler):
         # [4, 4]) mean(batch_size) is a single value, so this is exact; with a
         # range it is an expectation (batch count is genuinely stochastic then).
         num_samples = len(self.sampler)  # per-replica (DistributedSampler)
-        batch_sizes = [max(1, int(self.max_img_per_gpu // int(num))) for num in self.possible_nums]
+        batch_sizes = [
+            max(1, int(self.max_img_per_gpu // (int(num) * self.temporal_multiplier)))
+            for num in self.possible_nums
+        ]
         mean_batch_size = float(np.dot(self.normalized_weights, batch_sizes))
         if mean_batch_size <= 0:
             return 1

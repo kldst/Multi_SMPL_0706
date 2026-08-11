@@ -194,6 +194,96 @@ def smpl_losses_plus_from_axis_angle(
     }
 
 
+def compute_temporal_smpl_smoothness(
+    predictions,
+    batch,
+    *,
+    pose_order: int = 2,
+    beta_order: int = 1,
+    mesh_translate_order: int = 2,
+    loss_type: str = "l1",
+    exclude_root: bool = True,
+):
+    """Temporal regularizers on Hungarian-matched, identity-ordered people.
+
+    Inputs remain framewise ``[B*T,P,...]`` for compatibility with the existing
+    loss. ``batch['temporal_shape'] == [B,T]`` is the sole opt-in marker.
+    Missing people are removed with products of ``has_smpl`` over every frame in
+    the finite-difference stencil.
+    """
+    pred_pose = predictions["smpl_pose"]
+    zero = pred_pose.sum() * 0.0
+    result = {
+        "loss_smpl_temporal_pose": zero,
+        "loss_smpl_temporal_beta": zero,
+        "loss_smpl_temporal_mesh_translate": zero,
+    }
+    temporal_shape = batch.get("temporal_shape")
+    if temporal_shape is None:
+        return result
+    B, T = [int(x) for x in temporal_shape.reshape(-1)[:2].tolist()]
+    if B * T != pred_pose.shape[0]:
+        raise ValueError(
+            f"Temporal shape {(B, T)} does not match predictions batch {pred_pose.shape[0]}"
+        )
+
+    P = min(pred_pose.shape[1], batch["has_smpl"].shape[1])
+    valid = batch["has_smpl"][:, :P].to(pred_pose.dtype).reshape(B, T, P)
+
+    def _difference(x, order):
+        if order == 1:
+            if T < 2:
+                return None, None
+            return x[:, 1:] - x[:, :-1], valid[:, 1:] * valid[:, :-1]
+        if order == 2:
+            if T < 3:
+                return None, None
+            return (
+                x[:, 2:] - 2.0 * x[:, 1:-1] + x[:, :-2],
+                valid[:, 2:] * valid[:, 1:-1] * valid[:, :-2],
+            )
+        raise ValueError(f"Unsupported temporal order: {order}")
+
+    def _reduce(diff, mask, feature_dims):
+        if diff is None:
+            return zero
+        if loss_type == "l1":
+            value = diff.abs()
+        elif loss_type == "l2":
+            value = diff.square()
+        else:
+            raise ValueError(f"Unsupported temporal loss type: {loss_type}")
+        value = value.mean(dim=feature_dims)
+        mask = mask.to(value.dtype)
+        return (value * mask).sum() / mask.sum().clamp(min=1.0)
+
+    pose = pred_pose[:, :P, 3 if exclude_root else 0 :72].reshape(B, T, P, -1)
+    pose_rot = axis_angle_to_rotmat(pose)
+    pose_diff, pose_mask = _difference(pose_rot, int(pose_order))
+    result["loss_smpl_temporal_pose"] = _reduce(
+        pose_diff, pose_mask, feature_dims=(-1, -2, -3)
+    )
+
+    pred_beta = predictions.get("smpl_beta")
+    if pred_beta is not None:
+        beta = pred_beta[:, :P].reshape(B, T, P, -1)
+        beta_diff, beta_mask = _difference(beta, int(beta_order))
+        result["loss_smpl_temporal_beta"] = _reduce(
+            beta_diff, beta_mask, feature_dims=-1
+        )
+
+    pred_translate = predictions.get("mesh_translate")
+    if pred_translate is not None:
+        translate = pred_translate[:, :P].reshape(B, T, P, 3)
+        trans_diff, trans_mask = _difference(
+            translate, int(mesh_translate_order)
+        )
+        result["loss_smpl_temporal_mesh_translate"] = _reduce(
+            trans_diff, trans_mask, feature_dims=-1
+        )
+    return result
+
+
 
 def compute_smpl_loss(
     predictions,
@@ -210,6 +300,15 @@ def compute_smpl_loss(
     weight_joints2d: float = 0.0,
     weight_joints3d: float = 0.0,
     weight_vertices: float = 0.0,
+    use_temporal_training: bool = False,
+    weight_temporal_pose: float = 0.0,
+    weight_temporal_beta: float = 0.0,
+    weight_temporal_mesh_translate: float = 0.0,
+    temporal_pose_order: int = 2,
+    temporal_beta_order: int = 1,
+    temporal_mesh_translate_order: int = 2,
+    temporal_loss_type: str = "l1",
+    temporal_exclude_root: bool = True,
     use_gt: bool = False,
     # Standalone: use the GT (cam0-normalized) camera ONLY for the joints2d
     # reprojection loss, WITHOUT the full use_gt swap of pose/beta/trans/mesh_translate.
@@ -279,6 +378,11 @@ def compute_smpl_loss(
         key in batch and batch[key].dim() >= 5
         for key in ("smpl_joints2d", "smpl_joints3d_world", "smpl_joints2d_confidence")
     )
+    temporal_losses = {
+        "loss_smpl_temporal_pose": predictions["smpl_pose"].sum() * 0.0,
+        "loss_smpl_temporal_beta": predictions["smpl_pose"].sum() * 0.0,
+        "loss_smpl_temporal_mesh_translate": predictions["smpl_pose"].sum() * 0.0,
+    }
     if predictions["smpl_pose"].dim() == 3 and has_people_axis:
         if use_hungarian:
             predictions, batch, matching_cost_metrics = apply_hungarian_matching(
@@ -293,6 +397,22 @@ def compute_smpl_loss(
                 mask_cost_grid=hungarian_mask_cost_grid,
                 return_cost_metrics=True,
                 use_mamma=use_mamma,
+            )
+
+        if use_temporal_training:
+            if not use_hungarian:
+                raise ValueError(
+                    "Temporal multi-person loss requires use_hungarian=True so each "
+                    "trajectory follows a fixed GT identity."
+                )
+            temporal_losses = compute_temporal_smpl_smoothness(
+                predictions,
+                batch,
+                pose_order=temporal_pose_order,
+                beta_order=temporal_beta_order,
+                mesh_translate_order=temporal_mesh_translate_order,
+                loss_type=temporal_loss_type,
+                exclude_root=temporal_exclude_root,
             )
 
         B_people, P_people = predictions["smpl_pose"].shape[:2]
@@ -1054,6 +1174,10 @@ def compute_smpl_loss(
         weight_contact * loss_contact +
         weight_floor_contact * loss_floor_contact +
         weight_mask * loss_mask
+        + weight_temporal_pose * temporal_losses["loss_smpl_temporal_pose"]
+        + weight_temporal_beta * temporal_losses["loss_smpl_temporal_beta"]
+        + weight_temporal_mesh_translate
+        * temporal_losses["loss_smpl_temporal_mesh_translate"]
     )
 
     return {
@@ -1075,6 +1199,7 @@ def compute_smpl_loss(
         "loss_landmark_vis": loss_landmark_vis,
         "landmark_px": landmark_px.detach(),
         "loss_mask": loss_mask,
+        **temporal_losses,
         "mask_soft_iou": mask_soft_iou,
         # matched-pair Hungarian cost diagnostics (0 when the cost term is off).
         "hungarian_presence_cost": matching_cost_metrics["presence_cost"],

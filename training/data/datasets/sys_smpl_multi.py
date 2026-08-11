@@ -2,6 +2,7 @@ import logging
 import os
 import pickle
 import random
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -78,6 +79,19 @@ class SysSMPLMultiDataset(BaseDataset):
         self.inside_random = common_conf.inside_random
         self.allow_duplicate_img = common_conf.allow_duplicate_img
         self.fixed_view_sampling = getattr(common_conf, "fixed_view_sampling", False)
+        self.use_temporal_training = bool(
+            getattr(common_conf, "use_temporal_training", False)
+        )
+        self.temporal_clip_length = int(
+            getattr(common_conf, "temporal_clip_length", 3)
+        )
+        self.temporal_clip_stride = int(
+            getattr(common_conf, "temporal_clip_stride", 1)
+        )
+        if self.temporal_clip_length < 2:
+            raise ValueError("temporal_clip_length must be >= 2")
+        if self.temporal_clip_stride < 1:
+            raise ValueError("temporal_clip_stride must be >= 1")
 
         if SysSMPL_DIR is None or SysSMPL_ANNOTATION_DIR is None:
             raise ValueError("SysSMPL_DIR and SysSMPL_ANNOTATION_DIR must be specified.")
@@ -116,8 +130,13 @@ class SysSMPLMultiDataset(BaseDataset):
             self._verts512 = load_verts512_matrix(landmark_matrix_path)
 
         self.data_store = self._build_sequences()
+        people_source = (
+            self.frame_data_store.values()
+            if self.use_temporal_training
+            else self.data_store.values()
+        )
         inferred_max_people = max(
-            (view_annos[0]["num_people"] for view_annos in self.data_store.values()),
+            (view_annos[0]["num_people"] for view_annos in people_source),
             default=0,
         )
         if self.max_num_people is None:
@@ -134,7 +153,13 @@ class SysSMPLMultiDataset(BaseDataset):
             )
         self.sequence_list = list(self.data_store.keys())
         self.sequence_list_len = len(self.sequence_list)
-        self.total_frame_num = sum(len(seq) for seq in self.data_store.values())
+        if self.use_temporal_training:
+            self.total_frame_num = sum(
+                len(clip["frame_keys"]) * len(clip["common_view_names"])
+                for clip in self.data_store.values()
+            )
+        else:
+            self.total_frame_num = sum(len(seq) for seq in self.data_store.values())
 
         if split == "train":
             self.len_train = self.sequence_list_len if len_train is None else min(len_train, self.sequence_list_len)
@@ -148,6 +173,12 @@ class SysSMPLMultiDataset(BaseDataset):
         logging.info("%s: SysSMPLMulti total views: %d", status, self.total_frame_num)
         logging.info("SysSMPLMulti max_num_people: %d", self.max_num_people)
         logging.info("SysSMPLMulti data_root: %s", self.data_root)
+        logging.info(
+            "SysSMPLMulti temporal training: enabled=%s, clip_length=%d, stride=%d",
+            self.use_temporal_training,
+            self.temporal_clip_length,
+            self.temporal_clip_stride,
+        )
 
     @staticmethod
     def _load_pickle(path: Path):
@@ -263,15 +294,74 @@ class SysSMPLMultiDataset(BaseDataset):
         return joints[0, :24].detach().cpu().numpy().astype(np.float32)
 
     def _build_sequences(self) -> Dict[str, List[Dict[str, np.ndarray]]]:
-        raw_store = self._build_raw_mamma_sequences()
-        if not raw_store:
+        frame_store, sequence_frames = self._build_raw_mamma_sequences()
+        if not frame_store:
             raise ValueError(
                 f"No raw Mamma .data.pyd sequences found under {self.data_root} / {self.image_root}."
             )
-        logging.info("SysSMPLMulti raw Mamma sequences/frames: %d", len(raw_store))
-        return raw_store
+        logging.info("SysSMPLMulti raw Mamma sequences/frames: %d", len(frame_store))
+        self.frame_data_store = frame_store
+        if not self.use_temporal_training:
+            return frame_store
+        clip_store = self._build_temporal_clip_index(frame_store, sequence_frames)
+        if not clip_store:
+            raise ValueError(
+                "Temporal training is enabled but no consecutive clips with enough "
+                "shared views were found."
+            )
+        logging.info("SysSMPLMulti temporal clips: %d", len(clip_store))
+        return clip_store
 
-    def _build_raw_mamma_sequences(self) -> Dict[str, List[Dict[str, np.ndarray]]]:
+    @staticmethod
+    def _numeric_frame_id(frame_name: str) -> int:
+        """Extract the last integer from a MAMMA frame basename."""
+        matches = re.findall(r"\d+", str(frame_name))
+        if not matches:
+            raise ValueError(f"Frame name has no numeric id: {frame_name!r}")
+        return int(matches[-1])
+
+    def _build_temporal_clip_index(self, frame_store, sequence_frames):
+        """Build fixed-length clips without crossing a physical frame-number gap."""
+        clip_store = {}
+        T = self.temporal_clip_length
+        stride = self.temporal_clip_stride
+        for sequence_name, records in sequence_frames.items():
+            ordered = sorted(records, key=lambda item: item[0])
+            runs = []
+            for record in ordered:
+                if not runs or record[0] - runs[-1][-1][0] != 1:
+                    runs.append([])
+                runs[-1].append(record)
+
+            for run in runs:
+                if len(run) < T:
+                    continue
+                for start in range(0, len(run) - T + 1, stride):
+                    window = run[start : start + T]
+                    frame_keys = [record[2] for record in window]
+                    view_sets = [
+                        {anno["view_name"] for anno in frame_store[key]}
+                        for key in frame_keys
+                    ]
+                    common_views = sorted(set.intersection(*view_sets))
+                    if len(common_views) < self.min_num_images:
+                        continue
+                    frame_ids = [record[0] for record in window]
+                    if any(b - a != 1 for a, b in zip(frame_ids, frame_ids[1:])):
+                        raise RuntimeError(f"Non-consecutive temporal clip: {frame_ids}")
+                    clip_key = (
+                        f"temporal_{sequence_name}_frames_"
+                        f"{frame_ids[0]:06d}_{frame_ids[-1]:06d}"
+                    )
+                    clip_store[clip_key] = {
+                        "sequence_name": sequence_name,
+                        "frame_keys": frame_keys,
+                        "frame_ids": frame_ids,
+                        "common_view_names": common_views,
+                    }
+        return clip_store
+
+    def _build_raw_mamma_sequences(self):
         roots = [self.data_root]
         if self.image_root != self.data_root:
             roots.append(self.image_root)
@@ -284,9 +374,10 @@ class SysSMPLMultiDataset(BaseDataset):
         if self.max_sequences is not None:
             seq_dirs = seq_dirs[: int(self.max_sequences)]
         if not seq_dirs:
-            return {}
+            return {}, {}
 
         data_store: Dict[str, List[Dict[str, np.ndarray]]] = {}
+        sequence_frames = defaultdict(list)
         bad_pyds: List[str] = []
         # Every frame that does NOT make it into data_store is counted here, so a
         # silently-empty dataset is visible in the log instead of looking like a
@@ -391,6 +482,7 @@ class SysSMPLMultiDataset(BaseDataset):
                             break
                     view_annos.append(
                         {
+                            "view_name": str(view_name),
                             "image_path": str(image_path),
                             "intrinsics": camera["intrinsics"],
                             "extrinsics": camera["extrinsics"],
@@ -417,7 +509,15 @@ class SysSMPLMultiDataset(BaseDataset):
                     rel = str(seq_dir.relative_to(self.data_root))
                 except ValueError:
                     pass
-                data_store[f"raw_mamma_{rel}_frame_{frame}"] = view_annos
+                frame_key = f"raw_mamma_{rel}_frame_{frame}"
+                data_store[frame_key] = view_annos
+                try:
+                    numeric_frame_id = self._numeric_frame_id(frame)
+                except ValueError:
+                    drops["non_numeric_frame_id"] += 1
+                    del data_store[frame_key]
+                    continue
+                sequence_frames[rel].append((numeric_frame_id, str(frame), frame_key))
                 kept_here += 1
 
             per_seq_kept[str(seq_dir)] = kept_here
@@ -450,7 +550,7 @@ class SysSMPLMultiDataset(BaseDataset):
             log("SysSMPLMulti:   %4d/%4d frames  %s%s",
                 kept, seen, seq_path, "   <-- CONTRIBUTES NOTHING" if kept == 0 else "")
 
-        return data_store
+        return data_store, dict(sequence_frames)
 
     def _parse_gender_label(self, g_raw) -> int:
         if isinstance(g_raw, np.ndarray):
@@ -555,18 +655,174 @@ class SysSMPLMultiDataset(BaseDataset):
         aspect_ratio: float = 1.0,
         _resample_depth: int = 0,
     ) -> dict:
+        if not self.use_temporal_training:
+            return self._get_single_frame_data(
+                seq_index=seq_index,
+                img_per_seq=img_per_seq,
+                seq_name=seq_name,
+                ids=ids,
+                aspect_ratio=aspect_ratio,
+                _resample_depth=_resample_depth,
+            )
+
+        if self.inside_random:
+            seq_index = random.randint(0, self.sequence_list_len - 1)
+        if seq_name is None:
+            seq_name = self.sequence_list[seq_index]
+        clip = self.data_store[seq_name]
+
+        requested = int(img_per_seq or len(clip["common_view_names"]))
+        common_views = list(clip["common_view_names"])
+        if requested > len(common_views):
+            return self._resample_temporal_clip(
+                img_per_seq, aspect_ratio, _resample_depth,
+                reason=f"only {len(common_views)} shared views",
+            )
+        if self.fixed_view_sampling:
+            selected_view_names = common_views[:requested]
+        else:
+            order = np.random.permutation(len(common_views))[:requested]
+            selected_view_names = [common_views[int(i)] for i in order]
+
+        frame_batches = []
+        for frame_key in clip["frame_keys"]:
+            frame_batch = self._get_single_frame_data(
+                seq_name=frame_key,
+                img_per_seq=requested,
+                aspect_ratio=aspect_ratio,
+                required_view_names=selected_view_names,
+            )
+            if frame_batch is None:
+                return self._resample_temporal_clip(
+                    img_per_seq, aspect_ratio, _resample_depth,
+                    reason="a selected view was unreadable",
+                )
+            frame_batches.append(frame_batch)
+
+        return self._combine_temporal_frame_batches(
+            seq_name=seq_name,
+            clip=clip,
+            frame_batches=frame_batches,
+            selected_view_names=selected_view_names,
+        )
+
+    def _resample_temporal_clip(self, img_per_seq, aspect_ratio, depth, reason):
+        if depth < 20 and self.sequence_list_len > 1:
+            logging.warning(
+                "SysSMPLMulti: temporal clip unusable (%s); resampling.", reason
+            )
+            return self.get_data(
+                seq_index=random.randint(0, self.sequence_list_len - 1),
+                img_per_seq=img_per_seq,
+                aspect_ratio=aspect_ratio,
+                _resample_depth=depth + 1,
+            )
+        raise RuntimeError(
+            f"Could not gather a valid temporal clip after {depth} resamples: {reason}"
+        )
+
+    def _combine_temporal_frame_batches(
+        self, *, seq_name, clip, frame_batches, selected_view_names
+    ):
+        """Stack single-frame batches into a time-major T*V sample."""
+        T = len(frame_batches)
+        V = len(selected_view_names)
+        union_person_keys = sorted(
+            {key for frame_batch in frame_batches for key in frame_batch["person_keys"]}
+        )[: int(self.max_num_people)]
+        dst_person = {key: idx for idx, key in enumerate(union_person_keys)}
+        P = int(self.max_num_people)
+
+        person_keys = (
+            "smpl_pose", "smpl_beta", "smpl_trans", "smpl_gender", "has_smpl"
+        )
+        view_person_keys = (
+            "smpl_joints2d", "smpl_joints3d_world", "smpl_joints2d_confidence",
+            "smpl_landmarks2d", "smpl_landmarks2d_visibility", "person_mask",
+            "smpl_contact", "smpl_floor_contact",
+        )
+        view_keys = (
+            "images", "depths", "extrinsics", "intrinsics", "cam_points",
+            "world_points", "point_masks", "original_sizes", "image_paths",
+        )
+
+        combined = {
+            "seq_name": "syssmpl_multi_" + seq_name,
+            "frame_num": T * V,
+            "temporal_num_frames": T,
+            "views_per_frame": V,
+            "frame_ids": np.asarray(clip["frame_ids"], dtype=np.int64),
+            "view_ids": np.arange(V, dtype=np.int64),
+            "ids": np.tile(np.arange(V, dtype=np.int64), T),
+            "person_keys": union_person_keys,
+            "num_people": np.asarray(
+                [len(frame_batch["person_keys"]) for frame_batch in frame_batches],
+                dtype=np.int64,
+            ),
+        }
+
+        for key in view_keys:
+            if all(key in frame_batch for frame_batch in frame_batches):
+                values = []
+                for frame_batch in frame_batches:
+                    values.extend(list(frame_batch[key]))
+                combined[key] = values
+
+        for key in person_keys:
+            if not all(key in frame_batch for frame_batch in frame_batches):
+                continue
+            sample = np.asarray(frame_batches[0][key])
+            fill = 2 if key == "smpl_gender" else 0
+            out = np.full((T, P, *sample.shape[1:]), fill, dtype=sample.dtype)
+            for t, frame_batch in enumerate(frame_batches):
+                for src_idx, person_key in enumerate(frame_batch["person_keys"]):
+                    if person_key in dst_person:
+                        out[t, dst_person[person_key]] = np.asarray(frame_batch[key])[src_idx]
+            combined[key] = out
+
+        for key in view_person_keys:
+            if not all(key in frame_batch for frame_batch in frame_batches):
+                continue
+            sample = np.asarray(frame_batches[0][key])
+            out = np.zeros((T * V, P, *sample.shape[2:]), dtype=sample.dtype)
+            for t, frame_batch in enumerate(frame_batches):
+                value = np.asarray(frame_batch[key])
+                for src_idx, person_key in enumerate(frame_batch["person_keys"]):
+                    if person_key in dst_person:
+                        out[t * V : (t + 1) * V, dst_person[person_key]] = value[:, src_idx]
+            combined[key] = out
+
+        combined["selected_view_names"] = list(selected_view_names)
+        return combined
+
+    def _get_single_frame_data(
+        self,
+        seq_index: Optional[int] = None,
+        img_per_seq: Optional[int] = None,
+        seq_name: Optional[str] = None,
+        ids: Optional[List[int]] = None,
+        aspect_ratio: float = 1.0,
+        _resample_depth: int = 0,
+        required_view_names: Optional[List[str]] = None,
+    ) -> dict:
         if self.inside_random:
             seq_index = random.randint(0, self.sequence_list_len - 1)
 
         if seq_name is None:
             seq_name = self.sequence_list[seq_index]
 
-        metadata = self.data_store[seq_name]
+        metadata = self.frame_data_store[seq_name]
         n_views = len(metadata)
 
         # Build the full ordered list of view indices to TRY (corrupt ones get
         # skipped and replaced by later entries), plus the target view count.
-        if ids is None:
+        if required_view_names is not None:
+            by_name = {str(anno["view_name"]): idx for idx, anno in enumerate(metadata)}
+            if any(name not in by_name for name in required_view_names):
+                return None
+            view_order = [by_name[name] for name in required_view_names]
+            n_target = len(required_view_names)
+        elif ids is None:
             if self.fixed_view_sampling:
                 requested = img_per_seq or n_views
                 if requested > n_views:
@@ -593,6 +849,8 @@ class SysSMPLMultiDataset(BaseDataset):
                             and self._verts512 is not None and _is_raw_sel)
         sel = self._select_good_views(metadata, view_order, n_target, emit_mask_sel, emit_pyd_sel)
         if sel is None:
+            if required_view_names is not None:
+                return None
             # Not enough readable views in this frame -> resample a different sample.
             if _resample_depth < 20 and self.sequence_list_len > 1:
                 logging.warning(
@@ -600,7 +858,7 @@ class SysSMPLMultiDataset(BaseDataset):
                     seq_name, n_target,
                 )
                 new_idx = random.randint(0, self.sequence_list_len - 1)
-                return self.get_data(
+                return self._get_single_frame_data(
                     seq_index=new_idx, img_per_seq=img_per_seq,
                     aspect_ratio=aspect_ratio, _resample_depth=_resample_depth + 1,
                 )

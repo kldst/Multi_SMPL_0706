@@ -44,6 +44,7 @@ from train_utils.normalization import (
     normalize_camera_extrinsics_points_and_3djoints_batch,
 )
 from train_utils.optimizer import construct_optimizers
+from training.temporal import flatten_temporal_batch_for_framewise_model
 
 
 NORMALIZE_CAM = False
@@ -971,6 +972,7 @@ class Trainer:
         Returns:
             A dictionary containing the computed losses.
         """
+        batch = flatten_temporal_batch_for_framewise_model(batch)
         smpl_inputs = {}
         for key in ("views_per_frame", "temporal_num_frames", "frame_ids", "view_ids"):
             if key in batch:
