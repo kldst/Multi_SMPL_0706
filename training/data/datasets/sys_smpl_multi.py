@@ -275,7 +275,7 @@ class SysSMPLMultiDataset(BaseDataset):
                 return image_path
         return None
 
-    def _decode_raw_mamma_joints_world(self, pose: np.ndarray, beta: np.ndarray, trans: np.ndarray, gender) -> np.ndarray:
+    def _decode_raw_mamma_joints_world_batch(self, people) -> np.ndarray:
         # Import lazily to keep the classic npz loader lightweight and avoid a
         # module-level dependency from data loading to the loss stack.
         import inspect
@@ -285,13 +285,32 @@ class SysSMPLMultiDataset(BaseDataset):
             inspect.getargspec = inspect.getfullargspec
         from training.loss import _decode_smpl_batch, _normalize_gender_string
 
-        pose_t = torch.as_tensor(np.asarray(pose, dtype=np.float32).reshape(1, -1)[:, :72])
-        beta_t = torch.as_tensor(np.asarray(beta, dtype=np.float32).reshape(1, -1)[:, :10])
-        trans_t = torch.as_tensor(np.asarray(trans, dtype=np.float32).reshape(1, 3))
-        gender_key = _normalize_gender_string(gender)
+        pose_t = torch.as_tensor(np.stack([
+            np.asarray(person["smpl_pose"], dtype=np.float32).reshape(-1)[:72]
+            for person in people
+        ]))
+        beta_t = torch.as_tensor(np.stack([
+            np.asarray(person["smpl_beta"], dtype=np.float32).reshape(-1)[:10]
+            for person in people
+        ]))
+        trans_t = torch.as_tensor(np.stack([
+            np.asarray(person["smpl_trans"], dtype=np.float32).reshape(3)
+            for person in people
+        ]))
+        genders = [
+            _normalize_gender_string(person.get("gender", "neutral"))
+            for person in people
+        ]
         with torch.no_grad():
-            joints, _ = _decode_smpl_batch(pose_t, beta_t, trans_t, [gender_key], use_mamma=True)
-        return joints[0, :24].detach().cpu().numpy().astype(np.float32)
+            joints, _ = _decode_smpl_batch(
+                pose_t,
+                beta_t,
+                trans_t,
+                genders,
+                use_mamma=True,
+                with_vertices=False,
+            )
+        return joints[:, :24].detach().cpu().numpy().astype(np.float32)
 
     def _build_sequences(self) -> Dict[str, List[Dict[str, np.ndarray]]]:
         frame_store, sequence_frames = self._build_raw_mamma_sequences()
@@ -905,6 +924,9 @@ class SysSMPLMultiDataset(BaseDataset):
         smpl_genders = np.full((padded_people,), 2, dtype=np.int64)
         has_smpl = np.zeros((padded_people,), dtype=np.float32)
         person_keys = []
+        # World joints are camera-independent: batch-decode each person once per
+        # frame, then only run the inexpensive projection for individual views.
+        joints_world_by_person = self._decode_raw_mamma_joints_world_batch(person_anchor)
 
         for person_idx, person in enumerate(person_anchor):
             smpl_poses[person_idx] = np.asarray(person["smpl_pose"], dtype=np.float32).reshape(-1)[:72]
@@ -932,12 +954,7 @@ class SysSMPLMultiDataset(BaseDataset):
                 # coords with a high-rank joints2d tensor, so recreate the training
                 # joint targets from the SMPL-X world params (same convention as the
                 # loss) and project them with this view's camera.
-                joints_world = self._decode_raw_mamma_joints_world(
-                    person["smpl_pose"],
-                    person["smpl_beta"],
-                    person["smpl_trans"],
-                    person.get("gender", "neutral"),
-                )
+                joints_world = joints_world_by_person[person_idx]
                 joints3d_world[person_idx] = joints_world[:24]
                 joints2d_orig[person_idx] = self._project_points_opencv_np(
                     joints_world[:24],

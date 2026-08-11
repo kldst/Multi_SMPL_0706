@@ -299,11 +299,13 @@ def _decode_smplx_batch(
     betas: torch.Tensor,
     trans: torch.Tensor,
     genders: list[str],
+    with_vertices: bool = True,
 ):
     """SMPL-X variant of _decode_smpl_batch (used when use_mamma=True).
 
-    Returns (joints_world (B,24,3), vertices (B,10475,3)) using the torch SMPL-X
-    forward that mirrors the MAMMA data-generation script.
+    Returns ``(joints_world, vertices)`` using the torch SMPL-X forward that
+    mirrors the MAMMA data-generation script. ``vertices`` is ``None`` when
+    ``with_vertices=False``.
     """
     B = pose_aa.shape[0]
     if B == 0:
@@ -320,21 +322,24 @@ def _decode_smplx_batch(
 
         model = _get_smplx_model(pose_aa.device, gender_key)
         joints_g, verts_g = model(
-            pose_aa[idx], betas[idx], trans[idx], with_vertices=True
+            pose_aa[idx], betas[idx], trans[idx], with_vertices=with_vertices
         )
         joints_g = joints_g.to(dtype=pose_aa.dtype)
-        verts_g = verts_g.to(dtype=pose_aa.dtype)
+        if verts_g is not None:
+            verts_g = verts_g.to(dtype=pose_aa.dtype)
 
         if pred_joints_world is None:
             pred_joints_world = torch.zeros(
                 (B, joints_g.shape[1], 3), device=pose_aa.device, dtype=pose_aa.dtype
             )
-            pred_vertices = torch.zeros(
-                (B, verts_g.shape[1], 3), device=pose_aa.device, dtype=pose_aa.dtype
-            )
+            if verts_g is not None:
+                pred_vertices = torch.zeros(
+                    (B, verts_g.shape[1], 3), device=pose_aa.device, dtype=pose_aa.dtype
+                )
 
         pred_joints_world[idx] = joints_g
-        pred_vertices[idx] = verts_g
+        if pred_vertices is not None:
+            pred_vertices[idx] = verts_g
 
     return pred_joints_world, pred_vertices
 
@@ -345,9 +350,12 @@ def _decode_smpl_batch(
     trans: torch.Tensor | None,
     genders: list[str],
     use_mamma: bool = False,
+    with_vertices: bool = True,
 ):
     if use_mamma:
-        return _decode_smplx_batch(pose_aa, betas, trans, genders)
+        return _decode_smplx_batch(
+            pose_aa, betas, trans, genders, with_vertices=with_vertices
+        )
 
     B = pose_aa.shape[0]
     if B == 0:
@@ -664,5 +672,3 @@ def _project_points_opencv(
 
     uv = torch.stack([u, v], dim=-1)
     return uv
-
-

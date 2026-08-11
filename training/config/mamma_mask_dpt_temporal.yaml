@@ -35,6 +35,8 @@ temporal_training:
   weight_mesh_translate: 0.05
 
 img_size: 518
+# One temporal sample decodes 5 frames x 8 views. Keep several samples in
+# flight so image I/O and CPU preprocessing overlap with GPU execution.
 num_workers: 0
 seed_value: 42
 accum_steps: 1            # consider 4-8: Hungarian matching is noisy at batch=1
@@ -45,8 +47,8 @@ scale_by_extrinsics: False
 patch_size: 14
 val_epoch_freq: 5
 enable_val: False
-# The sampler counts T*V images when temporal training is enabled. With the
-# defaults T=3 and V=8, this gives one clip (24 images) per optimizer step.
+# The sampler counts T*V images when temporal training is enabled. With T=5,
+# V=8 and this budget, each optimizer step contains 5 clips (200 images).
 max_img_per_gpu: 200
 
 limit_train_batches: null
@@ -58,6 +60,7 @@ data:
     _target_: data.dynamic_dataloader.DynamicTorchDataset
     num_workers: ${num_workers}
     max_img_per_gpu: ${max_img_per_gpu}
+    pin_memory: True
     common_config:
       img_size: ${img_size}
       patch_size: ${patch_size}
@@ -91,6 +94,7 @@ data:
     _target_: data.dynamic_dataloader.DynamicTorchDataset
     num_workers: ${num_workers}
     max_img_per_gpu: ${max_img_per_gpu}
+    pin_memory: True
     common_config:
       img_size: ${img_size}
       patch_size: ${patch_size}
