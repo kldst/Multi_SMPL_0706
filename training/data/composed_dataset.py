@@ -5,6 +5,9 @@
 # LICENSE file in the root directory of this source tree.
 
 from abc import ABC
+from collections import defaultdict
+import logging
+import time
 
 from hydra.utils import instantiate
 import torch
@@ -74,6 +77,17 @@ class ComposedDataset(Dataset, ABC):
         # Whether the dataset is being used for training (affects augmentations)
         self.training = common_config.training
         self.common_config = common_config
+        self.defer_image_normalization = bool(
+            getattr(common_config, "defer_image_normalization", False)
+        )
+        self.profile_data_loading = bool(
+            getattr(common_config, "profile_data_loading", False)
+        )
+        self.profile_data_loading_every = max(
+            1, int(getattr(common_config, "profile_data_loading_every", 10))
+        )
+        self._profile_totals = defaultdict(float)
+        self._profile_samples = 0
 
         self.total_samples = len(self.base_dataset)
 
@@ -95,6 +109,8 @@ class ComposedDataset(Dataset, ABC):
         Returns:
             dict: A dictionary containing the sequence data (images, poses, tracks, etc.).
         """
+        sample_start = time.perf_counter()
+
         # If fixed settings are provided, override the tuple values
         if self.fixed_num_images > 0:
             seq_idx = idx_tuple[0] if isinstance(idx_tuple, tuple) else idx_tuple
@@ -102,25 +118,32 @@ class ComposedDataset(Dataset, ABC):
 
         # Retrieve the raw data batch from the appropriate base dataset
         batch = self.base_dataset[idx_tuple]
+        timings = batch.pop("_profile_timings", {})
         seq_name = batch["seq_name"]
 
         # --- Data Conversion and Preparation ---
         # Convert numpy arrays to tensors
-        images = torch.from_numpy(np.stack(batch["images"]).astype(np.float32)).contiguous()
-        # Normalize images from [0, 255] to [0, 1]
-        images = images.permute(0,3,1,2).to(torch.get_default_dtype()).div(255)
+        image_start = time.perf_counter()
+        image_array = np.stack(batch["images"])
+        if self.defer_image_normalization:
+            # Keep the compact uint8 representation through collation and H2D.
+            # The trainer converts it to [0, 1] float on the GPU.
+            images = torch.from_numpy(image_array).permute(0, 3, 1, 2).contiguous()
+        else:
+            images = torch.from_numpy(image_array.astype(np.float32)).contiguous()
+            images = images.permute(0, 3, 1, 2).to(torch.get_default_dtype()).div(255)
+        timings["image_stack"] = time.perf_counter() - image_start
 
         # Convert other data to tensors with appropriate types
-        depths = torch.from_numpy(np.stack(batch["depths"]).astype(np.float32))
+        basic_tensor_start = time.perf_counter()
         extrinsics = torch.from_numpy(np.stack(batch["extrinsics"]).astype(np.float32))
         intrinsics = torch.from_numpy(np.stack(batch["intrinsics"]).astype(np.float32))
-        cam_points = torch.from_numpy(np.stack(batch["cam_points"]).astype(np.float32))
-        world_points = torch.from_numpy(np.stack(batch["world_points"]).astype(np.float32))
-        point_masks = torch.from_numpy(np.stack(batch["point_masks"])) # Mask indicating valid depths / world points / cam points per frame
         ids = torch.from_numpy(batch["ids"])    # Frame indices sampled from the original sequence
+        timings["basic_tensor_pack"] = time.perf_counter() - basic_tensor_start
 
 
         # --- Apply Color Augmentation (training mode only) ---
+        augmentation_start = time.perf_counter()
         if self.training and self.image_aug is not None:
             if self.cojitter and random.random() > self.cojitter_ratio:
                 # Apply the same color jittering transformation to all frames
@@ -129,6 +152,8 @@ class ComposedDataset(Dataset, ABC):
                 # Apply different color jittering to each frame individually
                 for aug_img_idx in range(len(images)):
                     images[aug_img_idx] = self.image_aug(images[aug_img_idx])
+        timings["image_augmentation"] = time.perf_counter() - augmentation_start
+        tensor_pack_start = time.perf_counter()
 
 
         # --- Prepare Final Sample Dictionary ---
@@ -136,13 +161,23 @@ class ComposedDataset(Dataset, ABC):
             "seq_name": seq_name,
             "ids": ids,
             "images": images,
-            "depths": depths,
             "extrinsics": extrinsics,
             "intrinsics": intrinsics,
-            "cam_points": cam_points,
-            "world_points": world_points,
-            "point_masks": point_masks,
         }
+
+        optional_dense_fields = {
+            "depths": np.float32,
+            "cam_points": np.float32,
+            "world_points": np.float32,
+            "point_masks": None,
+        }
+        for key, dtype in optional_dense_fields.items():
+            if key not in batch:
+                continue
+            value = np.stack(batch[key])
+            if dtype is not None:
+                value = value.astype(dtype)
+            sample[key] = torch.from_numpy(value)
 
         if "image_filenames" in batch:
             sample["image_filenames"] = batch["image_filenames"]
@@ -313,7 +348,84 @@ class ComposedDataset(Dataset, ABC):
             sample["track_vis_mask"] = track_vis_mask
             sample["track_positive_mask"] = track_positive_mask
 
+        timings["tensor_pack"] = time.perf_counter() - tensor_pack_start
+        timings["sample_total"] = time.perf_counter() - sample_start
+        if self.profile_data_loading:
+            sample["_profile_sample_seconds"] = torch.tensor(
+                timings["sample_total"], dtype=torch.float64
+            )
+        self._update_data_profile(timings)
         return sample
+
+    def _update_data_profile(self, timings):
+        if not self.profile_data_loading:
+            return
+        for key, value in timings.items():
+            self._profile_totals[key] += float(value)
+        self._profile_samples += 1
+        if self._profile_samples < self.profile_data_loading_every:
+            return
+
+        count = self._profile_samples
+        averages = {
+            key: value / count for key, value in self._profile_totals.items()
+        }
+        total = max(averages.get("sample_total", 0.0), 1e-12)
+        measured_dataset = sum(
+            averages.get(key, 0.0)
+            for key in (
+                "view_read", "smpl_decode", "crop_resize", "view_other",
+                "frame_pack", "temporal_combine",
+            )
+        )
+        averages["dataset_other"] = max(
+            0.0, averages.get("dataset_total", 0.0) - measured_dataset
+        )
+        measured_preprocess = sum(
+            averages.get(key, 0.0)
+            for key in (
+                "image_copy", "crop_initial", "image_resize", "crop_final",
+                "image_rotate", "dense_geometry",
+            )
+        )
+        averages["preprocess_other"] = max(
+            0.0, averages.get("crop_resize", 0.0) - measured_preprocess
+        )
+        measured_sample = sum(
+            averages.get(key, 0.0)
+            for key in (
+                "dataset_total", "image_stack", "basic_tensor_pack",
+                "image_augmentation", "tensor_pack",
+            )
+        )
+        averages["composed_other"] = max(0.0, total - measured_sample)
+        dataset_keys = (
+            "view_read", "smpl_decode", "image_copy", "crop_initial",
+            "image_resize", "crop_final", "image_rotate", "dense_geometry",
+            "preprocess_other", "view_other", "frame_pack",
+            "temporal_combine", "dataset_other",
+        )
+        composed_keys = (
+            "image_stack", "basic_tensor_pack", "image_augmentation",
+            "tensor_pack", "composed_other",
+        )
+
+        def _format(keys):
+            return " | ".join(
+                f"{key}={averages.get(key, 0.0):.3f}s "
+                f"({100.0 * averages.get(key, 0.0) / total:.1f}%)"
+                for key in keys
+            )
+        logging.info(
+            "Data profile dataset (avg over %d clips): clip_total=%.3fs | %s",
+            count, total, _format(dataset_keys),
+        )
+        logging.info(
+            "Data profile compose (avg over %d clips): clip_total=%.3fs | %s",
+            count, total, _format(composed_keys),
+        )
+        self._profile_totals.clear()
+        self._profile_samples = 0
 
 
 class TupleConcatDataset(ConcatDataset):

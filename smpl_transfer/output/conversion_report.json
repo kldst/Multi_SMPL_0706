@@ -1,0 +1,74 @@
+{
+  "converted_frames_total": 2,
+  "mean_surface_error_mm": 3.9181915521621704,
+  "max_person_mean_surface_error_mm": 4.232526779174805,
+  "last_run": {
+    "requested_frames": 1,
+    "converted_frames": 1,
+    "failed_frames": 0,
+    "skipped_existing_frames": 0
+  },
+  "frames": [
+    {
+      "sequence": "01_hugging/001_hugging",
+      "frame": "00001",
+      "source": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/01_hugging/001_hugging/processed_data/smpl/00001.npy",
+      "output": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/output/01_hugging/001_hugging/00001.npy",
+      "people": {
+        "aria01": {
+          "mean_mm": 3.5995731353759766,
+          "median_mm": 2.8760557174682617,
+          "p95_mm": 8.86943531036377,
+          "max_mm": 18.351398468017578,
+          "initial_mean_mm": 144.87388610839844,
+          "improvement_mm": 141.27431297302246,
+          "steps": 300,
+          "elapsed_seconds": 39.10707950219512,
+          "evaluated_vertices": 8881
+        },
+        "aria02": {
+          "mean_mm": 3.7760753631591797,
+          "median_mm": 3.0113706588745117,
+          "p95_mm": 9.101705551147461,
+          "max_mm": 19.0870361328125,
+          "initial_mean_mm": 132.63973999023438,
+          "improvement_mm": 128.8636646270752,
+          "steps": 300,
+          "elapsed_seconds": 4.862434592097998,
+          "evaluated_vertices": 8881
+        }
+      }
+    },
+    {
+      "sequence": "01_hugging/001_hugging",
+      "frame": "00053",
+      "source": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/01_hugging/001_hugging/processed_data/smpl/00053.npy",
+      "output": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/output/01_hugging/001_hugging/00053.npy",
+      "people": {
+        "aria01": {
+          "mean_mm": 4.232526779174805,
+          "median_mm": 3.293807029724121,
+          "p95_mm": 10.40422534942627,
+          "max_mm": 21.033113479614258,
+          "initial_mean_mm": 136.06874084472656,
+          "improvement_mm": 131.83621406555176,
+          "steps": 300,
+          "elapsed_seconds": 5.598381892777979,
+          "evaluated_vertices": 8881
+        },
+        "aria02": {
+          "mean_mm": 4.064590930938721,
+          "median_mm": 3.1829309463500977,
+          "p95_mm": 10.124409675598145,
+          "max_mm": 24.16135025024414,
+          "initial_mean_mm": 134.59571838378906,
+          "improvement_mm": 130.53112745285034,
+          "steps": 300,
+          "elapsed_seconds": 4.85635350830853,
+          "evaluated_vertices": 8881
+        }
+      }
+    }
+  ],
+  "last_run_errors": []
+}

@@ -6,6 +6,7 @@
 
 import numpy as np
 from PIL import Image, ImageFile
+import time
 
 from torch.utils.data import Dataset
 from .dataset_util import *
@@ -53,6 +54,12 @@ class BaseDataset(Dataset):
         self.rescale = common_conf.rescale
         self.rescale_aug = common_conf.rescale_aug
         self.landscape_check = common_conf.landscape_check
+        self.emit_dense_geometry = bool(
+            getattr(common_conf, "emit_dense_geometry", True)
+        )
+        self.profile_data_loading = bool(
+            getattr(common_conf, "profile_data_loading", False)
+        )
 
     def __len__(self):
         return self.len_train
@@ -124,6 +131,7 @@ class BaseDataset(Dataset):
         filepath=None,
         safe_bound=4,
         extra_maps=None,
+        profile_timings=None,
     ):
         """
         Process a single image and its associated data.
@@ -153,9 +161,10 @@ class BaseDataset(Dataset):
                 track (numpy.ndarray, optional): Updated tracking information
             )
         """
+        copy_start = time.perf_counter()
         # Make copies to avoid in-place operations affecting original data
         image = np.copy(image)
-        depth_map = np.copy(depth_map)
+        depth_map = np.copy(depth_map) if depth_map is not None else None
         extri_opencv = np.copy(extri_opencv)
         intri_opencv = np.copy(intri_opencv)
         if track is not None:
@@ -164,6 +173,8 @@ class BaseDataset(Dataset):
         # SAME geometric ops as the image (nearest interp). Callers pass a dict
         # and read the transformed maps back out of it after this call returns.
         extra_maps = extra_maps if extra_maps is not None else {}
+        if profile_timings is not None:
+            profile_timings["image_copy"] += time.perf_counter() - copy_start
 
         # Apply random scale augmentation during training if enabled
         if self.training and self.aug_scale:
@@ -182,6 +193,7 @@ class BaseDataset(Dataset):
 
         # Move principal point to the image center and crop if necessary
         extra_maps_arg = extra_maps if extra_maps else None
+        crop_initial_start = time.perf_counter()
         image, depth_map, intri_opencv, track = crop_image_depth_and_intrinsic_by_pp(
             image,
             depth_map,
@@ -191,6 +203,10 @@ class BaseDataset(Dataset):
             filepath=filepath,
             extra_maps=extra_maps_arg,
         )
+        if profile_timings is not None:
+            profile_timings["crop_initial"] += (
+                time.perf_counter() - crop_initial_start
+            )
 
         original_size = np.array(image.shape[:2])  # update original_size
         target_shape = target_image_shape
@@ -207,6 +223,7 @@ class BaseDataset(Dataset):
                     rotate_to_portrait = True
 
         # Resize images and update intrinsics
+        resize_start = time.perf_counter()
         if self.rescale:
             image, depth_map, intri_opencv, track = resize_image_depth_and_intrinsic(
                 image,
@@ -221,10 +238,13 @@ class BaseDataset(Dataset):
             )
         else:
             print("Not rescaling the images")
+        if profile_timings is not None:
+            profile_timings["image_resize"] += time.perf_counter() - resize_start
         # print(f"resize image size: {image.shape}")
         # print(f"resize intri_opencv: {intri_opencv}")
 
         # Ensure final crop to target shape
+        crop_final_start = time.perf_counter()
         image, depth_map, intri_opencv, track = crop_image_depth_and_intrinsic_by_pp(
             image,
             depth_map,
@@ -235,11 +255,14 @@ class BaseDataset(Dataset):
             strict=True,
             extra_maps=extra_maps_arg,
         )
+        if profile_timings is not None:
+            profile_timings["crop_final"] += time.perf_counter() - crop_final_start
         # print(f"crop2 image size: {image.shape}")
         # print(f"crop2intri_opencv: {intri_opencv}")
 
         # Apply 90-degree rotation if needed
         if rotate_to_portrait:
+            rotate_start = time.perf_counter()
             assert self.landscape_check
             clockwise = np.random.rand() > 0.5
             image, depth_map, extri_opencv, intri_opencv, track = rotate_90_degrees(
@@ -251,11 +274,19 @@ class BaseDataset(Dataset):
                 track=track,
                 extra_maps=extra_maps_arg,
             )
+            if profile_timings is not None:
+                profile_timings["image_rotate"] += time.perf_counter() - rotate_start
 
-        # Convert depth to world and camera coordinates
-        world_coords_points, cam_coords_points, point_mask = (
-            depth_to_world_coords_points(depth_map, extri_opencv, intri_opencv)
-        )
+        # Dense depth-derived geometry is unnecessary when its heads/losses are disabled.
+        geometry_start = time.perf_counter()
+        if self.emit_dense_geometry:
+            world_coords_points, cam_coords_points, point_mask = (
+                depth_to_world_coords_points(depth_map, extri_opencv, intri_opencv)
+            )
+        else:
+            world_coords_points = cam_coords_points = point_mask = None
+        if profile_timings is not None:
+            profile_timings["dense_geometry"] += time.perf_counter() - geometry_start
 
         # Compute confidence for track based on FINAL image shape
         confidences = None

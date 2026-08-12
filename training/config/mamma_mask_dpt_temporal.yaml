@@ -9,7 +9,7 @@ defaults:
 # Framewise SMPL pose/beta training with temporal regularization. Dense
 # landmark/contact/person-mask heads are disabled; multi-person identity is
 # aligned with the remaining pose/beta/translation/presence Hungarian costs.
-exp_name: mamma_mask_dpt_noavgscale_1e-5_temporal
+exp_name: mamma_mask_dpt_noavgscale_1e-5_temporal_test2
 
 debug_max_sequences: null
 debug_max_frames_per_sequence: null
@@ -24,7 +24,7 @@ debug_val_max_frames_per_sequence: null
 temporal_training:
   enabled: True
   clip_length: 5          # order-2 pose/translation needs at least 3 frames
-  clip_stride: 1
+  clip_stride: 5
   loss_type: l1
   pose_order: 2
   beta_order: 1
@@ -35,8 +35,7 @@ temporal_training:
   weight_mesh_translate: 0.05
 
 img_size: 518
-# One temporal sample decodes 5 frames x 8 views. Keep several samples in
-# flight so image I/O and CPU preprocessing overlap with GPU execution.
+# The remote training environment requires single-process data loading.
 num_workers: 0
 seed_value: 42
 accum_steps: 1            # consider 4-8: Hungarian matching is noisy at batch=1
@@ -49,7 +48,7 @@ val_epoch_freq: 5
 enable_val: False
 # The sampler counts T*V images when temporal training is enabled. With T=5,
 # V=8 and this budget, each optimizer step contains 5 clips (200 images).
-max_img_per_gpu: 200
+max_img_per_gpu: 80
 
 limit_train_batches: null
 limit_val_batches: 10
@@ -67,6 +66,13 @@ data:
       training: True
       img_nums: [8, 8]
       fixed_view_sampling: False
+      # No depth/point head or loss: avoid ~1.6 GB of zero-valued dense tensors
+      # per 200-image batch.
+      emit_dense_geometry: False
+      # Collate/transfer uint8 images; normalize to float on the GPU.
+      defer_image_normalization: True
+      profile_data_loading: True
+      profile_data_loading_every: 10
       use_temporal_training: ${temporal_training.enabled}
       temporal_clip_length: ${temporal_training.clip_length}
       temporal_clip_stride: ${temporal_training.clip_stride}
@@ -101,6 +107,9 @@ data:
       training: False
       img_nums: [8, 8]
       fixed_view_sampling: True
+      emit_dense_geometry: False
+      defer_image_normalization: True
+      profile_data_loading: False
       use_temporal_training: ${temporal_training.enabled}
       temporal_clip_length: ${temporal_training.clip_length}
       temporal_clip_stride: ${temporal_training.clip_stride}

@@ -1,0 +1,42 @@
+{
+  "converted_camera_frames_total": 1,
+  "refiner": "none",
+  "last_run": {
+    "requested_camera_frames": 1,
+    "converted_camera_frames": 1,
+    "failed_camera_frames": 0,
+    "skipped_existing_camera_frames": 0
+  },
+  "frames": [
+    {
+      "sequence": "01_hugging/001_hugging",
+      "camera": "cam01",
+      "frame": "00053",
+      "source_image": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/01_hugging/001_hugging/exo/cam01/images/00053.jpg",
+      "rectified_image": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks_rectified_test/01_hugging/001_hugging/cam01/rectified/00053.jpg",
+      "camera_metadata": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks_rectified_test/01_hugging/001_hugging/cam01/rectified/00053.camera.npz",
+      "instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks_rectified_test/01_hugging/001_hugging/cam01/00053.mask.png",
+      "overlap_pixels_resolved": 15987,
+      "people": {
+        "aria01": {
+          "sam_used": false,
+          "mesh_pixels": 28808,
+          "final_pixels": 26656,
+          "final_mesh_iou": 0.9252985281866148
+        },
+        "aria02": {
+          "sam_used": false,
+          "mesh_pixels": 26184,
+          "final_pixels": 12349,
+          "final_mesh_iou": 0.47162389245340663
+        }
+      },
+      "instance_values": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "last_run_errors": []
+}

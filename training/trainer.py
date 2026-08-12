@@ -665,6 +665,8 @@ class Trainer:
         data_time = AverageMeter("Data Time", self.device, ":.4f")
         mem = AverageMeter("Mem (GB)", self.device, ":.4f")
         data_times = []
+        profiled_sample_times = []
+        collate_pin_overheads = []
         phase = 'train'
         
         loss_names = self._get_scalar_log_keys(phase)
@@ -712,6 +714,24 @@ class Trainer:
             # measure data loading time
             data_time.update(time.time() - end)
             data_times.append(data_time.val)
+            profile_sample_seconds = batch.pop("_profile_sample_seconds", None)
+            if profile_sample_seconds is not None and data_iter > 0:
+                profiled_seconds = float(profile_sample_seconds.sum().item())
+                profiled_sample_times.append(profiled_seconds)
+                collate_pin_overheads.append(max(0.0, data_time.val - profiled_seconds))
+                if len(profiled_sample_times) >= 10:
+                    logging.info(
+                        "Data profile (avg over %d batches): dataset_samples=%.3fs | "
+                        "collate_pin_overhead=%.3fs | measured_data_time=%.3fs",
+                        len(profiled_sample_times),
+                        sum(profiled_sample_times) / len(profiled_sample_times),
+                        sum(collate_pin_overheads) / len(collate_pin_overheads),
+                        sum(profiled_sample_times[i] + collate_pin_overheads[i]
+                            for i in range(len(profiled_sample_times)))
+                        / len(profiled_sample_times),
+                    )
+                    profiled_sample_times.clear()
+                    collate_pin_overheads.clear()
 
             
             with torch.cuda.amp.autocast(enabled=False):
@@ -973,6 +993,10 @@ class Trainer:
             A dictionary containing the computed losses.
         """
         batch = flatten_temporal_batch_for_framewise_model(batch)
+        if batch["images"].dtype == torch.uint8:
+            batch["images"] = batch["images"].to(
+                dtype=torch.get_default_dtype()
+            ).div_(255)
         smpl_inputs = {}
         for key in ("views_per_frame", "temporal_num_frames", "frame_ids", "view_ids"):
             if key in batch:

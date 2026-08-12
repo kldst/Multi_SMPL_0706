@@ -67,19 +67,17 @@ def compute_camera_loss(
 ):
     # List of predicted pose encodings per stage
     pred_pose_encodings = pred_dict['pose_enc_list']
-    # Binary mask for valid points per frame (B, N, H, W)
-    point_masks = batch_data['point_masks']
-
-    # Only consider frames with enough valid points (>100)
-    # valid_frame_mask = point_masks[:, 0].sum(dim=[-1, -2]) > 100
-    valid_frame_mask = torch.ones(point_masks.shape[0], dtype=torch.bool, device=point_masks.device)
-    
     # Number of prediction stages
     n_stages = len(pred_pose_encodings)
 
     # Get ground truth camera extrinsics and intrinsics
     gt_extrinsics = batch_data['extrinsics']
     gt_intrinsics = batch_data['intrinsics']
+    # All frames are valid here. The old point mask was only used to obtain B
+    # before being replaced by an all-True mask.
+    valid_frame_mask = torch.ones(
+        gt_extrinsics.shape[0], dtype=torch.bool, device=gt_extrinsics.device
+    )
     image_hw = batch_data['images'].shape[-2:]
 
     # Encode ground truth pose to match predicted encoding format
@@ -173,4 +171,3 @@ def camera_loss_single(pred_pose_enc, gt_pose_enc, loss_type="l1"):
     loss_FL = loss_FL.mean()
 
     return loss_T, loss_R, loss_FL
-

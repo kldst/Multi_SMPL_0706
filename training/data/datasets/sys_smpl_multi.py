@@ -3,6 +3,7 @@ import os
 import pickle
 import random
 import re
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -675,15 +676,24 @@ class SysSMPLMultiDataset(BaseDataset):
         _resample_depth: int = 0,
     ) -> dict:
         if not self.use_temporal_training:
-            return self._get_single_frame_data(
+            timings = defaultdict(float) if self.profile_data_loading else None
+            total_start = time.perf_counter()
+            batch = self._get_single_frame_data(
                 seq_index=seq_index,
                 img_per_seq=img_per_seq,
                 seq_name=seq_name,
                 ids=ids,
                 aspect_ratio=aspect_ratio,
                 _resample_depth=_resample_depth,
+                _profile_timings=timings,
             )
+            if timings is not None:
+                timings["dataset_total"] += time.perf_counter() - total_start
+                batch["_profile_timings"] = dict(timings)
+            return batch
 
+        total_start = time.perf_counter()
+        timings = defaultdict(float) if self.profile_data_loading else None
         if self.inside_random:
             seq_index = random.randint(0, self.sequence_list_len - 1)
         if seq_name is None:
@@ -710,6 +720,7 @@ class SysSMPLMultiDataset(BaseDataset):
                 img_per_seq=requested,
                 aspect_ratio=aspect_ratio,
                 required_view_names=selected_view_names,
+                _profile_timings=timings,
             )
             if frame_batch is None:
                 return self._resample_temporal_clip(
@@ -718,12 +729,18 @@ class SysSMPLMultiDataset(BaseDataset):
                 )
             frame_batches.append(frame_batch)
 
-        return self._combine_temporal_frame_batches(
+        combine_start = time.perf_counter()
+        batch = self._combine_temporal_frame_batches(
             seq_name=seq_name,
             clip=clip,
             frame_batches=frame_batches,
             selected_view_names=selected_view_names,
         )
+        if timings is not None:
+            timings["temporal_combine"] += time.perf_counter() - combine_start
+            timings["dataset_total"] += time.perf_counter() - total_start
+            batch["_profile_timings"] = dict(timings)
+        return batch
 
     def _resample_temporal_clip(self, img_per_seq, aspect_ratio, depth, reason):
         if depth < 20 and self.sequence_list_len > 1:
@@ -823,7 +840,9 @@ class SysSMPLMultiDataset(BaseDataset):
         aspect_ratio: float = 1.0,
         _resample_depth: int = 0,
         required_view_names: Optional[List[str]] = None,
+        _profile_timings=None,
     ) -> dict:
+        frame_start = time.perf_counter()
         if self.inside_random:
             seq_index = random.randint(0, self.sequence_list_len - 1)
 
@@ -866,7 +885,10 @@ class SysSMPLMultiDataset(BaseDataset):
         # it here so a corrupt pyd swaps the view instead of crashing mid-loop.
         emit_pyd_sel = bool((self.emit_landmarks or self.emit_contact)
                             and self._verts512 is not None and _is_raw_sel)
+        read_start = time.perf_counter()
         sel = self._select_good_views(metadata, view_order, n_target, emit_mask_sel, emit_pyd_sel)
+        if _profile_timings is not None:
+            _profile_timings["view_read"] += time.perf_counter() - read_start
         if sel is None:
             if required_view_names is not None:
                 return None
@@ -926,7 +948,10 @@ class SysSMPLMultiDataset(BaseDataset):
         person_keys = []
         # World joints are camera-independent: batch-decode each person once per
         # frame, then only run the inexpensive projection for individual views.
+        decode_start = time.perf_counter()
         joints_world_by_person = self._decode_raw_mamma_joints_world_batch(person_anchor)
+        if _profile_timings is not None:
+            _profile_timings["smpl_decode"] += time.perf_counter() - decode_start
 
         for person_idx, person in enumerate(person_anchor):
             smpl_poses[person_idx] = np.asarray(person["smpl_pose"], dtype=np.float32).reshape(-1)[:72]
@@ -937,10 +962,16 @@ class SysSMPLMultiDataset(BaseDataset):
             has_smpl[person_idx] = 1.0
             person_keys.append(person.get("person_key", f"person_{person_idx}"))
 
+        view_loop_start = time.perf_counter()
+        preprocess_elapsed = 0.0
         for view_i, anno in enumerate(annos):
             image_path = anno["image_path"]
             image = view_images[view_i]   # pre-loaded & validated in _select_good_views
-            depth_map = np.zeros(image.shape[:2], dtype=np.float32)
+            depth_map = (
+                np.zeros(image.shape[:2], dtype=np.float32)
+                if self.emit_dense_geometry
+                else None
+            )
 
             extri_opencv = np.copy(anno["extrinsics"])
             intri_opencv = np.copy(anno["intrinsics"])
@@ -1045,6 +1076,7 @@ class SysSMPLMultiDataset(BaseDataset):
             else:
                 track_in = joints2d_orig.reshape(-1, 2)
 
+            preprocess_start = time.perf_counter()
             (
                 image,
                 depth_map,
@@ -1065,7 +1097,9 @@ class SysSMPLMultiDataset(BaseDataset):
                 track=track_in,
                 filepath=image_path,
                 extra_maps=extra_maps,
+                profile_timings=_profile_timings,
             )
+            preprocess_elapsed += time.perf_counter() - preprocess_start
             H_final, W_final = image.shape[:2]
             joints2d_new = track_new[:n_joint_pts].reshape(padded_people, 24, 2)
             if confidence is not None:
@@ -1122,12 +1156,16 @@ class SysSMPLMultiDataset(BaseDataset):
                 person_mask_list.append(person_mask)
 
             images.append(image)
-            depths.append(depth_map)
             extrinsics.append(extri_opencv)
             intrinsics.append(intri_opencv)
-            cam_points.append(cam_coords_points)
-            world_points.append(world_coords_points)
-            point_masks.append(point_mask)
+            if depth_map is not None:
+                depths.append(depth_map)
+            if cam_coords_points is not None:
+                cam_points.append(cam_coords_points)
+            if world_coords_points is not None:
+                world_points.append(world_coords_points)
+            if point_mask is not None:
+                point_masks.append(point_mask)
             image_paths.append(image_path)
             original_sizes.append(original_size)
 
@@ -1135,6 +1173,14 @@ class SysSMPLMultiDataset(BaseDataset):
             smpl_joints2d_list.append(joints2d_new)
             confidences.append(joints_conf)
 
+        view_loop_elapsed = time.perf_counter() - view_loop_start
+        if _profile_timings is not None:
+            _profile_timings["crop_resize"] += preprocess_elapsed
+            _profile_timings["view_other"] += max(
+                0.0, view_loop_elapsed - preprocess_elapsed
+            )
+
+        pack_start = time.perf_counter()
         smpl_joints2d = np.stack(smpl_joints2d_list, axis=0).astype(np.float32)
         smpl_joints3d_world = np.stack(smpl_joints3d_world_list, axis=0).astype(np.float32)
         confidences = np.asarray(confidences, dtype=np.float32)
@@ -1144,12 +1190,8 @@ class SysSMPLMultiDataset(BaseDataset):
             "ids": np.asarray(ids, dtype=np.int64),
             "frame_num": len(extrinsics),
             "images": images,
-            "depths": depths,
             "extrinsics": extrinsics,
             "intrinsics": intrinsics,
-            "cam_points": cam_points,
-            "world_points": world_points,
-            "point_masks": point_masks,
             "original_sizes": original_sizes,
             "smpl_pose": smpl_poses,
             "smpl_beta": smpl_betas,
@@ -1163,6 +1205,14 @@ class SysSMPLMultiDataset(BaseDataset):
             "smpl_joints2d_confidence": confidences,
             "image_paths": image_paths,
         }
+        if depths:
+            batch["depths"] = depths
+        if cam_points:
+            batch["cam_points"] = cam_points
+        if world_points:
+            batch["world_points"] = world_points
+        if point_masks:
+            batch["point_masks"] = point_masks
 
         # Dense-landmark GT: (S, P, 512, 2) normalised 2D + (S, P, 512) visibility.
         if landmarks2d_list:
@@ -1176,4 +1226,7 @@ class SysSMPLMultiDataset(BaseDataset):
             batch["smpl_contact"] = np.stack(contact_list, axis=0).astype(np.float32)
             batch["smpl_floor_contact"] = np.stack(floor_contact_list, axis=0).astype(np.float32)
 
+        if _profile_timings is not None:
+            _profile_timings["frame_pack"] += time.perf_counter() - pack_start
+            _profile_timings["frame_total"] += time.perf_counter() - frame_start
         return batch

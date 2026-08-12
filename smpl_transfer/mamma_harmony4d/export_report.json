@@ -1,0 +1,50 @@
+{
+  "format": "minimal_raw_mamma_v1",
+  "required_by": "training/config/mamma_mask_dpt.yaml",
+  "omitted_fields": [
+    "vertices2d",
+    "vertices3d",
+    "joints2d",
+    "joints3d",
+    "vertex_visibility",
+    "sdf_vertices",
+    "floor_contact_mask",
+    "camera_normals"
+  ],
+  "last_run": {
+    "requested_camera_frames": 1,
+    "exported_camera_frames": 1,
+    "skipped_camera_frames": 0,
+    "failed_camera_frames": 0
+  },
+  "sequences": {
+    "01_hugging/001_hugging": {
+      "exported_name": "h4d_01_hugging_001_hugging",
+      "frames": 1
+    }
+  },
+  "camera_frames": [
+    {
+      "sequence": "01_hugging/001_hugging",
+      "exported_sequence": "h4d_01_hugging_001_hugging",
+      "camera": "cam01",
+      "frame": "00053",
+      "image_shape": [
+        720,
+        1280,
+        3
+      ],
+      "mask_values": [
+        0,
+        1,
+        2
+      ],
+      "person_pixels": {
+        "aria01": 29620,
+        "aria02": 13086
+      },
+      "validation_panel": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/mamma_harmony4d/_validation/h4d_01_hugging_001_hugging/cam01/00053_overlay.jpg"
+    }
+  ],
+  "errors": []
+}

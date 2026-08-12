@@ -1,0 +1,3 @@
+[submodule "mamma_off"]
+	path = mamma_off
+	url = https://github.com/cuevhv/mamma.git
