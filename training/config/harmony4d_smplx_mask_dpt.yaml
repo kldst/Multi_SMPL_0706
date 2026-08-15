@@ -9,7 +9,7 @@ exp_name: harmony4d_real_smplx_mask_dpt
 
 img_size: 518
 patch_size: 14
-num_workers: 4
+num_workers: 0
 max_img_per_gpu: 40
 scale_by_extrinsics: False
 enable_val: True
@@ -96,6 +96,10 @@ loss:
     hungarian_mask_cost_grid: 32
 
 optim:
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 2e-5
+    weight_decay: 0.0
   gradient_clip:
     _target_: train_utils.gradient_clip.GradientClipper
     configs:
