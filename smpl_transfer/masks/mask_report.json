@@ -1,9 +1,9 @@
 {
-  "converted_camera_frames_total": 2,
+  "converted_camera_frames_total": 10,
   "refiner": "sam2",
   "last_run": {
-    "requested_camera_frames": 1,
-    "converted_camera_frames": 1,
+    "requested_camera_frames": 6,
+    "converted_camera_frames": 6,
     "failed_camera_frames": 0,
     "skipped_existing_camera_frames": 0
   },
@@ -12,43 +12,46 @@
       "sequence": "01_hugging/001_hugging",
       "camera": "cam01",
       "frame": "00001",
-      "image": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/01_hugging/001_hugging/exo/cam01/images/00001.jpg",
+      "source_image": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/01_hugging/001_hugging/exo/cam01/images/00001.jpg",
+      "rectified_image": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam01/rectified/00001.jpg",
+      "camera_metadata": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam01/rectified/00001.camera.npz",
       "instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam01/00001.mask.png",
+      "original_fisheye_instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam01/original_fisheye/00001.mask.png",
       "overlap_pixels_resolved": 0,
       "people": {
         "aria01": {
-          "sam_score": 0.9295125884300911,
-          "sam_predicted_iou": 0.9524195194244385,
-          "mesh_recall_before_union": 0.9748403113544011,
-          "sam_mesh_iou": 0.8386950962266764,
+          "sam_score": 0.9257057453903895,
+          "sam_predicted_iou": 0.9485841989517212,
+          "mesh_recall_before_union": 0.9749706277274253,
+          "sam_mesh_iou": 0.8283453057877757,
           "prompt_box_xyxy": [
-            2211,
-            514,
-            2798,
-            2159
+            732,
+            180,
+            930,
+            719
           ],
           "positive_points": 4,
           "negative_points": 1,
-          "mesh_pixels": 422541,
-          "final_pixels": 491132,
-          "final_mesh_iou": 0.8603410081200166
+          "mesh_pixels": 47664,
+          "final_pixels": 56084,
+          "final_mesh_iou": 0.8498680550602667
         },
         "aria02": {
-          "sam_score": 0.9230868789244927,
-          "sam_predicted_iou": 0.9136514663696289,
-          "mesh_recall_before_union": 0.9725381812794838,
-          "sam_mesh_iou": 0.84695831670275,
+          "sam_score": 0.9213202306126197,
+          "sam_predicted_iou": 0.918732762336731,
+          "mesh_recall_before_union": 0.9736865738661877,
+          "sam_mesh_iou": 0.8357679707072654,
           "prompt_box_xyxy": [
-            1228,
-            725,
-            1678,
-            2097
+            426,
+            249,
+            561,
+            692
           ],
           "positive_points": 4,
           "negative_points": 1,
-          "mesh_pixels": 216009,
-          "final_pixels": 248037,
-          "final_mesh_iou": 0.8708741034603709
+          "mesh_pixels": 22270,
+          "final_pixels": 25945,
+          "final_mesh_iou": 0.8583542108306031
         }
       },
       "instance_values": [
@@ -65,6 +68,7 @@
       "rectified_image": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam01/rectified/00053.jpg",
       "camera_metadata": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam01/rectified/00053.camera.npz",
       "instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam01/00053.mask.png",
+      "original_fisheye_instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam01/original_fisheye/00053.mask.png",
       "overlap_pixels_resolved": 33688,
       "people": {
         "aria01": {
@@ -100,6 +104,422 @@
           "mesh_pixels": 26184,
           "final_pixels": 13086,
           "final_mesh_iou": 0.4587125292522566
+        }
+      },
+      "instance_values": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "sequence": "01_hugging/001_hugging",
+      "camera": "cam02",
+      "frame": "00001",
+      "source_image": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/01_hugging/001_hugging/exo/cam02/images/00001.jpg",
+      "rectified_image": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam02/rectified/00001.jpg",
+      "camera_metadata": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam02/rectified/00001.camera.npz",
+      "instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam02/00001.mask.png",
+      "original_fisheye_instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam02/original_fisheye/00001.mask.png",
+      "overlap_pixels_resolved": 0,
+      "people": {
+        "aria01": {
+          "sam_score": 0.9217042307176943,
+          "sam_predicted_iou": 0.9216156005859375,
+          "mesh_recall_before_union": 0.9800314053912589,
+          "sam_mesh_iou": 0.8245513596829241,
+          "prompt_box_xyxy": [
+            696,
+            166,
+            840,
+            719
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 38210,
+          "final_pixels": 45415,
+          "final_mesh_iou": 0.8413519762193108
+        },
+        "aria02": {
+          "sam_score": 0.9111436807676241,
+          "sam_predicted_iou": 0.9166255593299866,
+          "mesh_recall_before_union": 0.967192429022082,
+          "sam_mesh_iou": 0.8140745146352861,
+          "prompt_box_xyxy": [
+            220,
+            180,
+            403,
+            719
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 39625,
+          "final_pixels": 47077,
+          "final_mesh_iou": 0.8417061410030375
+        }
+      },
+      "instance_values": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "sequence": "01_hugging/001_hugging",
+      "camera": "cam02",
+      "frame": "00053",
+      "source_image": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/01_hugging/001_hugging/exo/cam02/images/00053.jpg",
+      "rectified_image": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam02/rectified/00053.jpg",
+      "camera_metadata": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam02/rectified/00053.camera.npz",
+      "instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam02/00053.mask.png",
+      "original_fisheye_instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/01_hugging/001_hugging/cam02/original_fisheye/00053.mask.png",
+      "overlap_pixels_resolved": 38895,
+      "people": {
+        "aria01": {
+          "sam_score": 0.853014613099139,
+          "sam_predicted_iou": 0.866050124168396,
+          "mesh_recall_before_union": 0.9058394600457997,
+          "sam_mesh_iou": 0.7562828608085331,
+          "prompt_box_xyxy": [
+            393,
+            175,
+            599,
+            719
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 33188,
+          "final_pixels": 34749,
+          "final_mesh_iou": 0.8256254534705614
+        },
+        "aria02": {
+          "sam_score": 0.7921040658274101,
+          "sam_predicted_iou": 0.7398321032524109,
+          "mesh_recall_before_union": 0.9561286583598957,
+          "sam_mesh_iou": 0.5535777199899338,
+          "prompt_box_xyxy": [
+            386,
+            198,
+            619,
+            719
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 34510,
+          "final_pixels": 25657,
+          "final_mesh_iou": 0.6331532803126951
+        }
+      },
+      "instance_values": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "sequence": "02_grappling/001_grappling",
+      "camera": "cam01",
+      "frame": "00301",
+      "source_image": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/02_grappling/001_grappling/exo/cam01/images/00301.jpg",
+      "rectified_image": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/02_grappling/001_grappling/cam01/rectified/00301.jpg",
+      "camera_metadata": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/02_grappling/001_grappling/cam01/rectified/00301.camera.npz",
+      "instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/02_grappling/001_grappling/cam01/00301.mask.png",
+      "original_fisheye_instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/02_grappling/001_grappling/cam01/original_fisheye/00301.mask.png",
+      "overlap_pixels_resolved": 17222,
+      "people": {
+        "aria01": {
+          "sam_score": 0.868685064445632,
+          "sam_predicted_iou": 0.8263881802558899,
+          "mesh_recall_before_union": 0.9553174810556572,
+          "sam_mesh_iou": 0.752495626222085,
+          "prompt_box_xyxy": [
+            675,
+            131,
+            843,
+            449
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 15308,
+          "final_pixels": 17087,
+          "final_mesh_iou": 0.8740599328936712
+        },
+        "aria02": {
+          "sam_score": 0.7864227477568928,
+          "sam_predicted_iou": 0.7005489468574524,
+          "mesh_recall_before_union": 0.9443874058863791,
+          "sam_mesh_iou": 0.5803975181407088,
+          "prompt_box_xyxy": [
+            691,
+            140,
+            824,
+            425
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 11688,
+          "final_pixels": 3396,
+          "final_mesh_iou": 0.2700176812326345
+        }
+      },
+      "instance_values": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "sequence": "02_grappling/001_grappling",
+      "camera": "cam02",
+      "frame": "00301",
+      "source_image": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/02_grappling/001_grappling/exo/cam02/images/00301.jpg",
+      "rectified_image": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/02_grappling/001_grappling/cam02/rectified/00301.jpg",
+      "camera_metadata": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/02_grappling/001_grappling/cam02/rectified/00301.camera.npz",
+      "instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/02_grappling/001_grappling/cam02/00301.mask.png",
+      "original_fisheye_instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/02_grappling/001_grappling/cam02/original_fisheye/00301.mask.png",
+      "overlap_pixels_resolved": 2417,
+      "people": {
+        "aria01": {
+          "sam_score": 0.7152201190699147,
+          "sam_predicted_iou": 0.7981322407722473,
+          "mesh_recall_before_union": 0.7224118316268487,
+          "sam_mesh_iou": 0.6479591836734694,
+          "prompt_box_xyxy": [
+            540,
+            206,
+            650,
+            436
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 7911,
+          "final_pixels": 7429,
+          "final_mesh_iou": 0.7607897153351699
+        },
+        "aria02": {
+          "sam_score": 0.7749186887854763,
+          "sam_predicted_iou": 0.8134198188781738,
+          "mesh_recall_before_union": 0.8023803912326184,
+          "sam_mesh_iou": 0.7034817646451079,
+          "prompt_box_xyxy": [
+            497,
+            205,
+            619,
+            449
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 8486,
+          "final_pixels": 8620,
+          "final_mesh_iou": 0.8793671720500988
+        }
+      },
+      "instance_values": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "sequence": "04_sword_part1/001_sword",
+      "camera": "cam01",
+      "frame": "00301",
+      "source_image": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/04_sword_part1/001_sword/exo/cam01/images/00301.jpg",
+      "rectified_image": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/04_sword_part1/001_sword/cam01/rectified/00301.jpg",
+      "camera_metadata": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/04_sword_part1/001_sword/cam01/rectified/00301.camera.npz",
+      "instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/04_sword_part1/001_sword/cam01/00301.mask.png",
+      "original_fisheye_instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/04_sword_part1/001_sword/cam01/original_fisheye/00301.mask.png",
+      "overlap_pixels_resolved": 0,
+      "people": {
+        "aria01": {
+          "sam_score": 0.8797188332237598,
+          "sam_predicted_iou": 0.8971279859542847,
+          "mesh_recall_before_union": 0.940681603571122,
+          "sam_mesh_iou": 0.7665081141578064,
+          "prompt_box_xyxy": [
+            547,
+            231,
+            669,
+            575
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 11649,
+          "final_pixels": 14176,
+          "final_mesh_iou": 0.8217409706546276
+        },
+        "aria02": {
+          "sam_score": 0.8970570069882248,
+          "sam_predicted_iou": 0.8609990477561951,
+          "mesh_recall_before_union": 0.9622322435174746,
+          "sam_mesh_iou": 0.8124702522608281,
+          "prompt_box_xyxy": [
+            653,
+            292,
+            776,
+            495
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 5322,
+          "final_pixels": 6302,
+          "final_mesh_iou": 0.8444938114884164
+        }
+      },
+      "instance_values": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "sequence": "04_sword_part1/001_sword",
+      "camera": "cam02",
+      "frame": "00301",
+      "source_image": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/04_sword_part1/001_sword/exo/cam02/images/00301.jpg",
+      "rectified_image": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/04_sword_part1/001_sword/cam02/rectified/00301.jpg",
+      "camera_metadata": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/04_sword_part1/001_sword/cam02/rectified/00301.camera.npz",
+      "instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/04_sword_part1/001_sword/cam02/00301.mask.png",
+      "original_fisheye_instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/04_sword_part1/001_sword/cam02/original_fisheye/00301.mask.png",
+      "overlap_pixels_resolved": 1793,
+      "people": {
+        "aria01": {
+          "sam_score": 0.7144569186427079,
+          "sam_predicted_iou": 0.8062906861305237,
+          "mesh_recall_before_union": 0.7227722772277227,
+          "sam_mesh_iou": 0.6393754760091394,
+          "prompt_box_xyxy": [
+            621,
+            284,
+            724,
+            553
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 6969,
+          "final_pixels": 6054,
+          "final_mesh_iou": 0.6741226378711916
+        },
+        "aria02": {
+          "sam_score": 0.8909600578476871,
+          "sam_predicted_iou": 0.8999873995780945,
+          "mesh_recall_before_union": 0.9274868298729471,
+          "sam_mesh_iou": 0.8240638766519823,
+          "prompt_box_xyxy": [
+            525,
+            310,
+            724,
+            640
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 12908,
+          "final_pixels": 14463,
+          "final_mesh_iou": 0.8924842702067344
+        }
+      },
+      "instance_values": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "sequence": "07_ballroom/001_ballroom",
+      "camera": "cam01",
+      "frame": "00301",
+      "source_image": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/07_ballroom/001_ballroom/exo/cam01/images/00301.jpg",
+      "rectified_image": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/07_ballroom/001_ballroom/cam01/rectified/00301.jpg",
+      "camera_metadata": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/07_ballroom/001_ballroom/cam01/rectified/00301.camera.npz",
+      "instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/07_ballroom/001_ballroom/cam01/00301.mask.png",
+      "original_fisheye_instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/07_ballroom/001_ballroom/cam01/original_fisheye/00301.mask.png",
+      "overlap_pixels_resolved": 315,
+      "people": {
+        "aria01": {
+          "sam_score": 0.8088853327483926,
+          "sam_predicted_iou": 0.8289196491241455,
+          "mesh_recall_before_union": 0.8513831665685697,
+          "sam_mesh_iou": 0.7246993987975952,
+          "prompt_box_xyxy": [
+            663,
+            246,
+            733,
+            428
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 3398,
+          "final_pixels": 3628,
+          "final_mesh_iou": 0.7896077432501274
+        },
+        "aria02": {
+          "sam_score": 0.8811777213317462,
+          "sam_predicted_iou": 0.920271098613739,
+          "mesh_recall_before_union": 0.8964833183047791,
+          "sam_mesh_iou": 0.8296061415220294,
+          "prompt_box_xyxy": [
+            685,
+            231,
+            758,
+            455
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 5545,
+          "final_pixels": 5976,
+          "final_mesh_iou": 0.9240146960587843
+        }
+      },
+      "instance_values": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "sequence": "07_ballroom/001_ballroom",
+      "camera": "cam02",
+      "frame": "00301",
+      "source_image": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/07_ballroom/001_ballroom/exo/cam02/images/00301.jpg",
+      "rectified_image": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/07_ballroom/001_ballroom/cam02/rectified/00301.jpg",
+      "camera_metadata": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/07_ballroom/001_ballroom/cam02/rectified/00301.camera.npz",
+      "instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/07_ballroom/001_ballroom/cam02/00301.mask.png",
+      "original_fisheye_instance_mask": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/masks/07_ballroom/001_ballroom/cam02/original_fisheye/00301.mask.png",
+      "overlap_pixels_resolved": 367,
+      "people": {
+        "aria01": {
+          "sam_score": 0.854687951390036,
+          "sam_predicted_iou": 0.8648739457130432,
+          "mesh_recall_before_union": 0.8893931753235838,
+          "sam_mesh_iou": 0.7900552486187845,
+          "prompt_box_xyxy": [
+            754,
+            288,
+            874,
+            505
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 5949,
+          "final_pixels": 6345,
+          "final_mesh_iou": 0.8795291239871579
+        },
+        "aria02": {
+          "sam_score": 0.8838060357134203,
+          "sam_predicted_iou": 0.9233490824699402,
+          "mesh_recall_before_union": 0.9446121340175068,
+          "sam_mesh_iou": 0.7561005073689296,
+          "prompt_box_xyxy": [
+            710,
+            270,
+            799,
+            537
+          ],
+          "positive_points": 4,
+          "negative_points": 1,
+          "mesh_pixels": 6626,
+          "final_pixels": 8263,
+          "final_mesh_iou": 0.8018879341643471
         }
       },
       "instance_values": [

@@ -123,6 +123,7 @@ python smpl_transfer/generate_harmony4d_masks.py \
   --frames 00001 \
   --camera cam01 \
   --refiner sam2 \
+  --export-original-mask \
   --visualize 1 \
   --device cuda:0
 ```
@@ -135,7 +136,11 @@ Outputs are written below `smpl_transfer/masks/`:
 01_hugging/001_hugging/cam01/masks/mask_00001_02.png
 01_hugging/001_hugging/cam01/rectified/00001.jpg
 01_hugging/001_hugging/cam01/rectified/00001.camera.npz
+01_hugging/001_hugging/cam01/original_fisheye/00001.mask.png
+01_hugging/001_hugging/cam01/original_fisheye/masks/mask_00001_01.png
+01_hugging/001_hugging/cam01/original_fisheye/masks/mask_00001_02.png
 _validation/01_hugging/001_hugging/cam01/00001_overlay.jpg
+_validation_original_fisheye/01_hugging/001_hugging/cam01/00001_overlay.jpg
 mask_report.json
 ```
 
@@ -176,6 +181,11 @@ The exporter intentionally requires both `rectified/<frame>.jpg` and
 `rectified/<frame>.camera.npz`. Old masks generated before this ordering change
 are not accepted, preventing a distorted mask from being paired with a pinhole
 camera.
+
+When `--export-original-mask` is enabled, the final rectified instance mask is
+also sampled back onto the original fisheye pixel grid. These files are for
+checking or consuming the source images; MAMMA training continues to use the
+rectified RGB/mask/intrinsic bundle.
 
 It deliberately omits vertices2d/3d, landmarks, visibility, contact/SDF, and
 normals. A small one-view validation export is:

@@ -247,6 +247,59 @@ def project_vertices(
     return pixels.astype(np.float32), camera_xyz[:, 2].astype(np.float32)
 
 
+def project_mask_to_original(
+    rectified_mask: np.ndarray,
+    camera: Camera,
+    rectified_intrinsic: np.ndarray,
+    source_shape: tuple[int, int],
+) -> np.ndarray:
+    """Sample a rectified mask back onto the original distorted image grid.
+
+    ``cv2.remap`` needs, for every destination pixel in the distorted image,
+    the corresponding source coordinate in the rectified mask.  Fisheye
+    ``undistortPoints`` supplies exactly that distorted->rectified mapping.
+    Rows are processed in chunks so a typical 3840x2160 Harmony4D inverse map
+    remains exact at source resolution without materializing all 8M points.
+    """
+    source_height, source_width = (int(source_shape[0]), int(source_shape[1]))
+    intrinsic, distortion = camera_intrinsic_and_distortion(camera)
+    intrinsic[0, :] *= source_width / camera.width
+    intrinsic[1, :] *= source_height / camera.height
+
+    if distortion is None:
+        return cv2.resize(
+            rectified_mask,
+            (source_width, source_height),
+            interpolation=cv2.INTER_NEAREST,
+        )
+
+    original_mask = np.zeros((source_height, source_width), dtype=rectified_mask.dtype)
+    x_coordinates = np.arange(source_width, dtype=np.float32)
+    for row_start in range(0, source_height, 256):
+        row_end = min(source_height, row_start + 256)
+        grid_x, grid_y = np.meshgrid(
+            x_coordinates,
+            np.arange(row_start, row_end, dtype=np.float32),
+        )
+        distorted_pixels = np.stack([grid_x, grid_y], axis=-1).reshape(-1, 1, 2)
+        rectified_pixels = cv2.fisheye.undistortPoints(
+            distorted_pixels,
+            intrinsic,
+            distortion,
+            R=np.eye(3),
+            P=np.asarray(rectified_intrinsic, dtype=np.float64),
+        ).reshape(row_end - row_start, source_width, 2)
+        original_mask[row_start:row_end] = cv2.remap(
+            rectified_mask,
+            rectified_pixels[..., 0].astype(np.float32),
+            rectified_pixels[..., 1].astype(np.float32),
+            interpolation=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+    return original_mask
+
+
 def _scaled_shape(height: int, width: int, long_side: int) -> tuple[int, int, float]:
     scale = min(1.0, float(long_side) / max(height, width))
     return max(1, round(height * scale)), max(1, round(width * scale)), scale
@@ -532,6 +585,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--undistort-max-side", type=int, default=1280)
     result.add_argument("--undistort-balance", type=float, default=0.0)
     result.add_argument("--rectified-jpeg-quality", type=int, default=95)
+    result.add_argument(
+        "--export-original-mask",
+        action="store_true",
+        help="also inverse-project masks to the original distorted RGB resolution",
+    )
     result.add_argument("--visualize", type=int, default=0, metavar="N")
     result.add_argument("--overwrite", action="store_true")
     result.add_argument("--dry-run", action="store_true")
@@ -612,7 +670,10 @@ def main() -> int:
         rectified_dir = camera_dir / "rectified"
         rectified_path = rectified_dir / f"{frame}.jpg"
         camera_path = rectified_dir / f"{frame}.camera.npz"
-        if all(path.is_file() for path in (instance_path, rectified_path, camera_path)) and not args.overwrite:
+        required_outputs = [instance_path, rectified_path, camera_path]
+        if args.export_original_mask:
+            required_outputs.append(camera_dir / "original_fisheye" / f"{frame}.mask.png")
+        if all(path.is_file() for path in required_outputs) and not args.overwrite:
             skipped += 1
             print(f"[{job_idx}/{len(jobs)}] skip {instance_path}")
             continue
@@ -642,6 +703,34 @@ def main() -> int:
                 refined, details = refine_with_sam(predictor, image, full_mesh)
             final_instance = resolve_instances(refined, mesh_instance)
             overlap_before = int(np.logical_and(refined[0], refined[1]).sum())
+
+            original_instance = None
+            original_instance_path = None
+            if args.export_original_mask:
+                original_instance = project_mask_to_original(
+                    final_instance,
+                    camera,
+                    intrinsic,
+                    tuple(source_shape.tolist()),
+                )
+                invalid_original = np.setdiff1d(
+                    np.unique(original_instance), np.asarray([0, 1, 2], dtype=np.uint8)
+                )
+                if invalid_original.size:
+                    raise RuntimeError(
+                        f"Inverse projection changed mask labels: {invalid_original.tolist()}"
+                    )
+                original_dir = camera_dir / "original_fisheye"
+                original_instance_path = original_dir / f"{frame}.mask.png"
+                atomic_imwrite(original_instance_path, original_instance)
+                for person_idx in range(1, len(PEOPLE) + 1):
+                    binary_original = (
+                        (original_instance == person_idx) * 255
+                    ).astype(np.uint8)
+                    atomic_imwrite(
+                        original_dir / "masks" / f"mask_{frame}_{person_idx:02d}.png",
+                        binary_original,
+                    )
 
             atomic_imwrite(
                 rectified_path,
@@ -675,6 +764,9 @@ def main() -> int:
                 "sequence": str(relative), "camera": camera.name, "frame": frame,
                 "source_image": str(image_path), "rectified_image": str(rectified_path),
                 "camera_metadata": str(camera_path), "instance_mask": str(instance_path),
+                "original_fisheye_instance_mask": (
+                    str(original_instance_path) if original_instance_path else None
+                ),
                 "overlap_pixels_resolved": overlap_before, "people": person_report,
                 "instance_values": np.unique(final_instance).astype(int).tolist(),
             }
@@ -685,6 +777,30 @@ def main() -> int:
                     output_root / "_validation" / relative / camera.name / f"{frame}_overlay.jpg",
                     panel, [cv2.IMWRITE_JPEG_QUALITY, 94],
                 )
+                if original_instance is not None:
+                    source_image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+                    if source_image is None:
+                        raise RuntimeError(f"Could not reread source image {image_path}")
+                    original_overlay = color_overlay(source_image, original_instance)
+                    max_side = 1500
+                    scale = min(1.0, max_side / max(source_image.shape[:2]))
+                    display_size = (
+                        round(source_image.shape[1] * scale),
+                        round(source_image.shape[0] * scale),
+                    )
+                    original_panel = np.concatenate(
+                        [
+                            cv2.resize(source_image, display_size, interpolation=cv2.INTER_AREA),
+                            cv2.resize(original_overlay, display_size, interpolation=cv2.INTER_AREA),
+                        ],
+                        axis=1,
+                    )
+                    atomic_imwrite(
+                        output_root / "_validation_original_fisheye" / relative
+                        / camera.name / f"{frame}_overlay.jpg",
+                        original_panel,
+                        [cv2.IMWRITE_JPEG_QUALITY, 94],
+                    )
                 visualized += 1
             print(
                 f"[{job_idx}/{len(jobs)}] {relative}/{camera.name}/{frame} "

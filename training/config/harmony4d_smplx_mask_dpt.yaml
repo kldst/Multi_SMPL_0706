@@ -1,0 +1,148 @@
+defaults:
+  - mamma_mask_dpt
+  - _self_
+
+# Harmony4D real-image fine-tuning with the offline SMPL->SMPL-X fits and
+# identity-safe SAM2 instance masks. The dataset filters incomplete frames at
+# index-build time, so every sampled item has at least eight complete views.
+exp_name: harmony4d_real_smplx_mask_dpt
+
+img_size: 518
+patch_size: 14
+num_workers: 4
+max_img_per_gpu: 40
+scale_by_extrinsics: False
+enable_val: True
+val_sequence_fraction: 0.1
+split_seed: 42
+
+data:
+  train:
+    common_config:
+      img_size: ${img_size}
+      patch_size: ${patch_size}
+      training: True
+      img_nums: [8, 8]
+      fixed_view_sampling: False
+      inside_random: False
+      rescale_aug: False
+      augs:
+        aspects: [1.0, 1.0]
+        scales: null
+    dataset:
+      dataset_configs:
+        - _target_: training.data.datasets.harmony4d.Harmony4DDataset
+          split: train
+          Harmony4D_DIR: /dataset/Harmony4D
+          min_num_images: 8
+          max_num_people: 2
+          body_model_type: smplx
+          smplx_annotation_root: /Multi_SMPL_0706/smpl_transfer/output
+          person_mask_root: /Multi_SMPL_0706/smpl_transfer/masks
+          emit_person_mask: True
+          person_mask_stride: 1
+          val_sequence_fraction: ${val_sequence_fraction}
+          split_seed: ${split_seed}
+          fixed_anchor_camera: null
+          max_sequences: ${debug_max_sequences}
+          max_frames_per_sequence: ${debug_max_frames_per_sequence}
+
+  val:
+    common_config:
+      img_size: ${img_size}
+      patch_size: ${patch_size}
+      training: False
+      img_nums: [8, 8]
+      fixed_view_sampling: True
+      inside_random: False
+      rescale_aug: False
+      augs:
+        aspects: [1.0, 1.0]
+        scales: null
+    dataset:
+      dataset_configs:
+        - _target_: training.data.datasets.harmony4d.Harmony4DDataset
+          split: val
+          Harmony4D_DIR: /dataset/Harmony4D
+          min_num_images: 8
+          max_num_people: 2
+          body_model_type: smplx
+          smplx_annotation_root: /Multi_SMPL_0706/smpl_transfer/output
+          person_mask_root: /Multi_SMPL_0706/smpl_transfer/masks
+          emit_person_mask: True
+          person_mask_stride: 1
+          val_sequence_fraction: ${val_sequence_fraction}
+          split_seed: ${split_seed}
+          fixed_anchor_camera: null
+          max_sequences: ${debug_val_max_sequences}
+          max_frames_per_sequence: ${debug_val_max_frames_per_sequence}
+
+checkpoint:
+  save_dir: logs/${exp_name}/ckpts
+  # Continue from the checkpoint that already contains the trained DPT person
+  # mask head as well as the camera/SMPL heads.
+  resume_checkpoint_path: /Multi_SMPL_0706/logs/mamma_mask_dpt_noavgscale_5e-5_continue/ckpts/checkpoint_7.pt
+  strict: False
+  load_aggregator_only: False
+  load_model_only: True
+  init_mask_trunk_from_depth: /Multi_SMPL_0706/logs/mamma_mask_dpt_noavgscale_5e-5_continue/ckpts/checkpoint_7.pt
+
+loss:
+  smplx_model_dir: /train-data-3-hdd/yian/Multi_SMPL_0706/mamma/smplx_models
+  smpl:
+    use_mamma: True
+    weight_mask: 1.0
+    hungarian_cost_mask_weight: 1.0
+    hungarian_mask_cost_grid: 32
+
+optim:
+  gradient_clip:
+    _target_: train_utils.gradient_clip.GradientClipper
+    configs:
+      - module_name: ["aggregator"]
+        max_norm: 1.0
+        norm_type: 2
+      - module_name: ["camera"]
+        max_norm: 1.0
+        norm_type: 2
+      - module_name: ["smpl"]
+        max_norm: 1.0
+        norm_type: 2
+      - module_name: ["person_mask_head"]
+        max_norm: 1.0
+        norm_type: 2
+
+model:
+  _target_: vggt.models.vggt.VGGT
+  enable_camera: True
+  enable_depth: False
+  enable_point: False
+  enable_track: False
+  enable_smpl: False
+  enable_smpl_multi_query: False
+  enable_smpl_multi_query_trans: False
+  enable_smpl_multi_query_trans_rot: True
+  smpl_num_people: 20
+  enable_smpl_dense_landmark: False
+  enable_person_mask: True
+  person_mask_head_type: dpt
+  person_mask_down_ratio: 1
+  person_mask_embed_dim: 128
+  landmark_use_mask_embedding: False
+  landmark_predict_contact: False
+
+max_epochs: 100
+
+distributed:
+  backend: nccl
+  comms_dtype: None
+  find_unused_parameters: True
+  timeout_mins: 30
+  gradient_as_bucket_view: True
+  bucket_cap_mb: 25
+  broadcast_buffers: True
+
+cuda:
+  cudnn_deterministic: False
+  cudnn_benchmark: False
+  allow_tf32: True

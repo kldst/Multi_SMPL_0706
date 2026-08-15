@@ -17,8 +17,10 @@ Expected sequence layout::
 
 The emitted tensors follow the same batch contract as SysSMPLMultiDataset. By
 default they use Harmony4D's classic-SMPL annotations; ``body_model_type=smplx``
-loads body-only SMPL-X fits produced by ``fit_harmony4d_smplx.py``. No instance
-mask, dense landmark, or contact target is emitted.
+loads offline body-only SMPL-X fits. When ``emit_person_mask=True``, only
+complete rectified RGB/mask/camera bundles are indexed and synchronized
+per-person mask targets are emitted. Dense landmark and contact targets are not
+emitted.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ import numpy as np
 
 from training.data.base_dataset import BaseDataset
 from training.data.dataset_util import read_image_cv2
+from training.data.landmark_mask_gt import rasterize_person_patch_mask
 
 
 @dataclass(frozen=True)
@@ -58,7 +61,7 @@ class _SequenceRecord:
 
 
 class Harmony4DDataset(BaseDataset):
-    """Load synchronized Harmony4D exo views with neutral-SMPL supervision."""
+    """Load synchronized Harmony4D exo views with SMPL/SMPL-X supervision."""
 
     PEOPLE = ("aria01", "aria02")
 
@@ -81,6 +84,9 @@ class Harmony4DDataset(BaseDataset):
         fixed_anchor_camera: Optional[str] = None,
         body_model_type: str = "smpl",
         smplx_annotation_root: Optional[str] = None,
+        person_mask_root: Optional[str] = None,
+        emit_person_mask: bool = False,
+        person_mask_stride: Optional[int] = None,
     ):
         super().__init__(common_conf=common_conf)
 
@@ -123,6 +129,26 @@ class Harmony4DDataset(BaseDataset):
                 "body_model_type=smplx requires an existing "
                 f"smplx_annotation_root, got {self.smplx_annotation_root}"
             )
+        self.emit_person_mask = bool(emit_person_mask)
+        self.person_mask_root = (
+            None
+            if person_mask_root is None
+            else Path(person_mask_root).expanduser()
+        )
+        if self.emit_person_mask and (
+            self.person_mask_root is None or not self.person_mask_root.is_dir()
+        ):
+            raise ValueError(
+                "emit_person_mask=True requires an existing person_mask_root, "
+                f"got {self.person_mask_root}"
+            )
+        self.person_mask_stride = (
+            int(person_mask_stride)
+            if person_mask_stride is not None
+            else None
+        )
+        if self.person_mask_stride is not None and self.person_mask_stride < 1:
+            raise ValueError("person_mask_stride must be positive")
 
         self.undistort_max_side = (
             None if undistort_max_side is None else int(undistort_max_side)
@@ -148,17 +174,38 @@ class Harmony4DDataset(BaseDataset):
 
         self.sequences: List[_SequenceRecord] = []
         self.samples: List[Tuple[int, str]] = []
+        candidate_frames = 0
+        missing_annotations = 0
+        incomplete_mask_frames = 0
         for path in sequence_paths:
             try:
                 record = self._build_sequence_record(
                     path, max_frames=max_frames_per_sequence
                 )
+                candidate_frames += len(record.frames)
                 if self.body_model_type == "smplx":
+                    before = len(record.frames)
                     record.frames = [
                         frame
                         for frame in record.frames
                         if self._annotation_path(record.path, frame).is_file()
                     ]
+                    missing_annotations += before - len(record.frames)
+                if self.emit_person_mask:
+                    # Filter incomplete pseudo-GT before samples reach the sampler.
+                    # A frame is usable only when at least min_num_images cameras
+                    # have the full rectified RGB + mask + camera-metadata bundle.
+                    before = len(record.frames)
+                    record.frames = [
+                        frame
+                        for frame in record.frames
+                        if sum(
+                            self._view_available(record, camera, frame)
+                            for camera in record.cameras
+                        )
+                        >= self.min_num_images
+                    ]
+                    incomplete_mask_frames += before - len(record.frames)
             except Exception as exc:
                 logging.warning("Harmony4D: skipping %s: %s", path, exc)
                 continue
@@ -181,6 +228,15 @@ class Harmony4DDataset(BaseDataset):
             len(self.samples),
             self.min_num_images,
             self.root,
+        )
+        logging.info(
+            "Harmony4D %s filtering: candidates=%d, missing_annotations=%d, "
+            "incomplete_mask_frames=%d, retained=%d",
+            self.split,
+            candidate_frames,
+            missing_annotations,
+            incomplete_mask_frames,
+            len(self.samples),
         )
 
     @staticmethod
@@ -384,6 +440,29 @@ class Harmony4DDataset(BaseDataset):
         relative_sequence = Path(sequence.parent.name) / sequence.name
         return self.smplx_annotation_root / relative_sequence / f"{frame}.npy"
 
+    def _mask_bundle_paths(
+        self, record: _SequenceRecord, camera: _CameraCalibration, frame: str
+    ) -> Tuple[Path, Path, Path]:
+        assert self.person_mask_root is not None
+        camera_dir = self.person_mask_root / record.name / camera.name
+        return (
+            camera_dir / f"{frame}.mask.png",
+            camera_dir / "rectified" / f"{frame}.jpg",
+            camera_dir / "rectified" / f"{frame}.camera.npz",
+        )
+
+    def _view_available(
+        self, record: _SequenceRecord, camera: _CameraCalibration, frame: str
+    ) -> bool:
+        if not (camera.image_dir / f"{frame}.jpg").is_file():
+            return False
+        if not self.emit_person_mask:
+            return True
+        return all(
+            path.is_file()
+            for path in self._mask_bundle_paths(record, camera, frame)
+        )
+
     @staticmethod
     def _intrinsic_and_distortion(
         calibration: _CameraCalibration,
@@ -507,7 +586,7 @@ class Harmony4DDataset(BaseDataset):
         available = [
             i
             for i, camera in enumerate(record.cameras)
-            if (camera.image_dir / f"{frame}.jpg").is_file()
+            if self._view_available(record, camera, frame)
         ]
         if len(available) < img_per_seq:
             raise RuntimeError(
@@ -626,10 +705,18 @@ class Harmony4DDataset(BaseDataset):
         cam_points, world_points, point_masks = [], [], []
         joints2d_views, confidence_views = [], []
         image_filenames, original_sizes, camera_ids = [], [], []
+        person_mask_views = []
 
         for view_id in view_ids:
             camera = record.cameras[view_id]
-            image_path = camera.image_dir / f"{frame}.jpg"
+            instance_mask = None
+            camera_metadata_path = None
+            if self.emit_person_mask:
+                mask_path, image_path, camera_metadata_path = self._mask_bundle_paths(
+                    record, camera, frame
+                )
+            else:
+                image_path = camera.image_dir / f"{frame}.jpg"
             image = read_image_cv2(str(image_path))
             if image is None:
                 if _resample_depth < 20 and len(self.samples) > 1:
@@ -641,10 +728,55 @@ class Harmony4DDataset(BaseDataset):
                     )
                 raise RuntimeError(f"Could not read {image_path}")
 
-            image, intrinsic = self._undistort(record.name, camera, image)
-            extrinsic = camera.extrinsics.copy()
+            if self.emit_person_mask:
+                instance_mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+                if instance_mask is None:
+                    raise RuntimeError(f"Could not read {mask_path}")
+                if instance_mask.shape != image.shape[:2]:
+                    raise ValueError(
+                        f"Harmony4D RGB/mask shape mismatch for {record.name}/"
+                        f"{camera.name}/{frame}: {image.shape[:2]} vs "
+                        f"{instance_mask.shape}"
+                    )
+                invalid_labels = np.setdiff1d(
+                    np.unique(instance_mask), np.asarray([0, 1, 2], dtype=np.uint8)
+                )
+                if invalid_labels.size:
+                    raise ValueError(
+                        f"Invalid instance labels in {mask_path}: "
+                        f"{invalid_labels.tolist()}"
+                    )
+                assert camera_metadata_path is not None
+                with np.load(camera_metadata_path, allow_pickle=False) as metadata:
+                    intrinsic = np.asarray(metadata["intrinsic"], dtype=np.float32)
+                    stored_extrinsic = np.asarray(
+                        metadata["extrinsics"], dtype=np.float32
+                    )
+                    rectified_shape = tuple(
+                        np.asarray(metadata["rectified_shape"], dtype=np.int32).tolist()
+                    )
+                if rectified_shape != image.shape[:2]:
+                    raise ValueError(
+                        f"Rectified metadata/image mismatch in {camera_metadata_path}: "
+                        f"{rectified_shape} vs {image.shape[:2]}"
+                    )
+                if stored_extrinsic.shape != (3, 4) or not np.allclose(
+                    stored_extrinsic, camera.extrinsics, atol=1e-5
+                ):
+                    raise ValueError(
+                        f"Camera extrinsics mismatch in {camera_metadata_path}"
+                    )
+                extrinsic = stored_extrinsic.copy()
+            else:
+                image, intrinsic = self._undistort(record.name, camera, image)
+                extrinsic = camera.extrinsics.copy()
             original_size = np.asarray(image.shape[:2], dtype=np.int64)
             depth_map = np.zeros(image.shape[:2], dtype=np.float32)
+            extra_maps = (
+                {"person_mask": instance_mask.astype(np.float32)}
+                if instance_mask is not None
+                else None
+            )
             (
                 image,
                 depth_map,
@@ -664,6 +796,7 @@ class Harmony4DDataset(BaseDataset):
                 target_shape,
                 track=None,
                 filepath=str(image_path),
+                extra_maps=extra_maps,
             )
 
             # The camera pose encoding stores FoV but not principal point and
@@ -686,6 +819,14 @@ class Harmony4DDataset(BaseDataset):
                     flags=cv2.INTER_LINEAR,
                     borderMode=cv2.BORDER_CONSTANT,
                 )
+                if extra_maps is not None:
+                    extra_maps["person_mask"] = cv2.warpAffine(
+                        extra_maps["person_mask"],
+                        affine,
+                        (width_final, height_final),
+                        flags=cv2.INTER_NEAREST,
+                        borderMode=cv2.BORDER_CONSTANT,
+                    )
                 intrinsic = intrinsic.copy()
                 intrinsic[0, 2] = width_final / 2.0
                 intrinsic[1, 2] = height_final / 2.0
@@ -709,6 +850,19 @@ class Harmony4DDataset(BaseDataset):
             ).astype(np.float32)
             confidence *= has_smpl[:, None]
 
+            if extra_maps is not None:
+                mask_stride = self.person_mask_stride or self.patch_size
+                mask_h = height_final // mask_stride
+                mask_w = width_final // mask_stride
+                per_person_mask = np.zeros(
+                    (padded_people, mask_h, mask_w), dtype=np.float32
+                )
+                for person_idx in range(person_count):
+                    per_person_mask[person_idx] = rasterize_person_patch_mask(
+                        extra_maps["person_mask"], person_idx + 1, mask_h, mask_w
+                    )
+                person_mask_views.append(per_person_mask)
+
             images.append(image)
             depths.append(depth_map)
             extrinsics.append(extrinsic.astype(np.float32))
@@ -725,7 +879,7 @@ class Harmony4DDataset(BaseDataset):
         repeated_joints_world = np.repeat(
             joints_world[None, ...], len(view_ids), axis=0
         ).astype(np.float32)
-        return {
+        result = {
             "seq_name": f"harmony4d_{record.name.replace('/', '_')}_{frame}",
             "ids": np.asarray(view_ids, dtype=np.int64),
             "frame_num": len(view_ids),
@@ -751,3 +905,6 @@ class Harmony4DDataset(BaseDataset):
             "cam_ids": np.asarray(camera_ids, dtype=np.int64),
             "smpl_model_type": self.body_model_type,
         }
+        if person_mask_views:
+            result["person_mask"] = np.stack(person_mask_views).astype(np.float32)
+        return result

@@ -1,10 +1,10 @@
 {
-  "converted_frames_total": 2,
-  "mean_surface_error_mm": 3.9181915521621704,
-  "max_person_mean_surface_error_mm": 4.232526779174805,
+  "converted_frames_total": 5,
+  "mean_surface_error_mm": 4.514043521881104,
+  "max_person_mean_surface_error_mm": 6.003730773925781,
   "last_run": {
-    "requested_frames": 1,
-    "converted_frames": 1,
+    "requested_frames": 3,
+    "converted_frames": 3,
     "failed_frames": 0,
     "skipped_existing_frames": 0
   },
@@ -65,6 +65,96 @@
           "improvement_mm": 130.53112745285034,
           "steps": 300,
           "elapsed_seconds": 4.85635350830853,
+          "evaluated_vertices": 8881
+        }
+      }
+    },
+    {
+      "sequence": "02_grappling/001_grappling",
+      "frame": "00301",
+      "source": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/02_grappling/001_grappling/processed_data/smpl/00301.npy",
+      "output": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/output/02_grappling/001_grappling/00301.npy",
+      "people": {
+        "aria01": {
+          "mean_mm": 4.822000503540039,
+          "median_mm": 3.9617273807525635,
+          "p95_mm": 12.149727821350098,
+          "max_mm": 21.211942672729492,
+          "initial_mean_mm": 119.48412322998047,
+          "improvement_mm": 114.66212272644043,
+          "steps": 300,
+          "elapsed_seconds": 8.818402612116188,
+          "evaluated_vertices": 8881
+        },
+        "aria02": {
+          "mean_mm": 4.722863674163818,
+          "median_mm": 3.7242770195007324,
+          "p95_mm": 11.469066619873047,
+          "max_mm": 28.024003982543945,
+          "initial_mean_mm": 125.58158111572266,
+          "improvement_mm": 120.85871744155884,
+          "steps": 300,
+          "elapsed_seconds": 4.764779657125473,
+          "evaluated_vertices": 8881
+        }
+      }
+    },
+    {
+      "sequence": "04_sword_part1/001_sword",
+      "frame": "00301",
+      "source": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/04_sword_part1/001_sword/processed_data/smpl/00301.npy",
+      "output": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/output/04_sword_part1/001_sword/00301.npy",
+      "people": {
+        "aria01": {
+          "mean_mm": 5.360274791717529,
+          "median_mm": 4.017637252807617,
+          "p95_mm": 14.173660278320312,
+          "max_mm": 35.6421012878418,
+          "initial_mean_mm": 125.30059814453125,
+          "improvement_mm": 119.94032335281372,
+          "steps": 300,
+          "elapsed_seconds": 4.743642685003579,
+          "evaluated_vertices": 8881
+        },
+        "aria02": {
+          "mean_mm": 6.003730773925781,
+          "median_mm": 3.890759229660034,
+          "p95_mm": 18.570114135742188,
+          "max_mm": 33.64414596557617,
+          "initial_mean_mm": 108.86849975585938,
+          "improvement_mm": 102.8647689819336,
+          "steps": 300,
+          "elapsed_seconds": 4.645252249203622,
+          "evaluated_vertices": 8881
+        }
+      }
+    },
+    {
+      "sequence": "07_ballroom/001_ballroom",
+      "frame": "00301",
+      "source": "/train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D/07_ballroom/001_ballroom/processed_data/smpl/00301.npy",
+      "output": "/train-data-3-hdd/yian/Multi_SMPL_0706/smpl_transfer/output/07_ballroom/001_ballroom/00301.npy",
+      "people": {
+        "aria01": {
+          "mean_mm": 4.05332612991333,
+          "median_mm": 3.453456163406372,
+          "p95_mm": 9.6857271194458,
+          "max_mm": 19.799524307250977,
+          "initial_mean_mm": 140.71624755859375,
+          "improvement_mm": 136.66292142868042,
+          "steps": 300,
+          "elapsed_seconds": 4.527074687182903,
+          "evaluated_vertices": 8881
+        },
+        "aria02": {
+          "mean_mm": 4.5054731369018555,
+          "median_mm": 3.618598461151123,
+          "p95_mm": 11.817465782165527,
+          "max_mm": 24.371829986572266,
+          "initial_mean_mm": 137.72914123535156,
+          "improvement_mm": 133.2236680984497,
+          "steps": 300,
+          "elapsed_seconds": 4.861520634032786,
           "evaluated_vertices": 8881
         }
       }
