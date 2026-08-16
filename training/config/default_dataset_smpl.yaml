@@ -28,6 +28,9 @@ data:
       max_img_per_gpu: 48
       allow_duplicate_img: False
       fixed_view_sampling: False
+      # Debug-only paths/camera IDs. Disable for heterogeneous mixed batches;
+      # images, ``ids``, camera matrices, and all supervision remain available.
+      include_metadata: True
       repeat_batch: False
 
       augs:
@@ -69,6 +72,7 @@ data:
       img_nums: [4, 4]
       allow_duplicate_img: False
       fixed_view_sampling: True
+      include_metadata: True
 
       augs:
         cojitter: False

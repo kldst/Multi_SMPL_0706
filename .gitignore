@@ -102,3 +102,4 @@ Thumbs.db
 /MAMMA_eval_dance
 /MAMMA_markerless_multiple_people
 /debug/*
+!/debug/debug_mixed_mamma_harmony4d.py

@@ -33,12 +33,12 @@ data:
       dataset_configs:
         - _target_: training.data.datasets.harmony4d.Harmony4DDataset
           split: train
-          Harmony4D_DIR: /dataset/Harmony4D
+          Harmony4D_DIR: /train-data-2-hdd/yian/Multi_SMPL_Dataset_real/Harmony4D
           min_num_images: 8
           max_num_people: 2
           body_model_type: smplx
-          smplx_annotation_root: /Multi_SMPL_0706/smpl_transfer/output
-          person_mask_root: /Multi_SMPL_0706/smpl_transfer/masks
+          smplx_annotation_root: /train-data-2-hdd/yian/output
+          person_mask_root: /train-data-2-hdd/yian/masks
           emit_person_mask: True
           person_mask_stride: 1
           val_sequence_fraction: ${val_sequence_fraction}
@@ -63,12 +63,12 @@ data:
       dataset_configs:
         - _target_: training.data.datasets.harmony4d.Harmony4DDataset
           split: val
-          Harmony4D_DIR: /dataset/Harmony4D
+          Harmony4D_DIR: /mamma/Harmony4D
           min_num_images: 8
           max_num_people: 2
           body_model_type: smplx
-          smplx_annotation_root: /Multi_SMPL_0706/smpl_transfer/output
-          person_mask_root: /Multi_SMPL_0706/smpl_transfer/masks
+          smplx_annotation_root: /train-data-2-hdd/yian/output
+          person_mask_root: /train-data-2-hdd/yian/masks
           emit_person_mask: True
           person_mask_stride: 1
           val_sequence_fraction: ${val_sequence_fraction}

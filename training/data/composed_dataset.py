@@ -179,8 +179,20 @@ class ComposedDataset(Dataset, ABC):
                 value = value.astype(dtype)
             sample[key] = torch.from_numpy(value)
 
-        if "image_filenames" in batch:
-            sample["image_filenames"] = batch["image_filenames"]
+        # File/camera identifiers are debug metadata, not model inputs.  Keep a
+        # canonical schema when requested so heterogeneous datasets can still be
+        # collated together: older datasets call the paths ``image_paths`` while
+        # Harmony4D calls them ``image_filenames``.  Mixed training can disable
+        # the metadata entirely to avoid moving unused strings through workers.
+        include_metadata = bool(
+            getattr(self.common_config, "include_metadata", True)
+        )
+        if include_metadata:
+            image_filenames = batch.get(
+                "image_filenames", batch.get("image_paths")
+            )
+            if image_filenames is not None:
+                sample["image_filenames"] = list(image_filenames)
 
         if "background_masks" in batch:
             sample["background_masks"] = torch.from_numpy(
@@ -207,10 +219,17 @@ class ComposedDataset(Dataset, ABC):
                 np.asarray(batch["view_ids"]).astype(np.int64)
             )
 
-        if "cam_ids" in batch:
-            sample["cam_ids"] = torch.from_numpy(
-                np.asarray(batch["cam_ids"]).astype(np.int64)
-            )
+        if include_metadata:
+            # ``ids`` is the stable local view index shared by all current
+            # datasets.  Harmony4D additionally exposes a camera-name-derived
+            # integer; use it when available and otherwise retain the local view
+            # identity.  Camera IDs are intentionally only meaningful within a
+            # sequence/dataset, never across MAMMA and Harmony4D.
+            cam_ids = batch.get("cam_ids", batch.get("ids"))
+            if cam_ids is not None:
+                sample["cam_ids"] = torch.from_numpy(
+                    np.asarray(cam_ids).astype(np.int64)
+                )
 
         # original_sizes: list of [H, W] per view
         if "original_sizes" in batch:
