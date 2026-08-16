@@ -121,7 +121,7 @@ data:
       dataset_configs:
       - _target_: training.data.datasets.harmony4d.Harmony4DDataset
         split: val
-        Harmony4D_DIR: /mamma/Harmony4D
+        Harmony4D_DIR: /dataset/Harmony4D
         min_num_images: 8
         max_num_people: 6
         body_model_type: smplx
